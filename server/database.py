@@ -498,10 +498,11 @@ def insert_anchor(agent_id: str, chain_head_hash: str) -> str:
         except Exception:
             sig = ""
 
-    # Fallback: HMAC-SHA256 with API key
+    # Fallback: HMAC-SHA256 with API key.
+    # HMAC handles arbitrary-length keys natively; no pre-hashing is needed.
     if not sig:
-        key = hashlib.sha256((API_SECRET_KEY or "itdn-default-anchor-key").encode()).digest()
-        sig = hmac.new(key, chain_head_hash.encode(), hashlib.sha256).hexdigest()
+        mac_key = (API_SECRET_KEY or "itdn-default-anchor-key").encode()
+        sig = hmac.new(mac_key, chain_head_hash.encode(), hashlib.sha256).hexdigest()
 
     now = _utcnow()
     with _lock:
