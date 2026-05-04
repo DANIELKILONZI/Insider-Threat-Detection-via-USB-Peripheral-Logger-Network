@@ -47,6 +47,22 @@ def main() -> None:
         monitors.append(bt_monitor)
 
     transport.start()
+
+    from agent.anchor_scheduler import AnchorScheduler
+    from agent.integrity import IntegrityChecker
+    anchor_scheduler = AnchorScheduler(audit_logger, transport)
+    anchor_scheduler.start()
+
+    checker = IntegrityChecker()
+    try:
+        is_trusted = checker.check_with_server(transport)
+        if not is_trusted:
+            logger.warning("Agent integrity check: hash mismatch or not registered (continuing)")
+        else:
+            logger.info("Agent integrity check passed")
+    except Exception:
+        logger.warning("Agent integrity check could not complete (continuing)")
+
     for m in monitors:
         m.start()
 
@@ -65,6 +81,7 @@ def main() -> None:
 
     for m in monitors:
         m.stop()
+    anchor_scheduler.stop()
     transport.stop()
 
     logger.info("Audit chain head: %s", audit_logger.chain_head)

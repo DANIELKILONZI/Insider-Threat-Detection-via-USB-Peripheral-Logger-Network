@@ -109,6 +109,47 @@ _audit_tbl = sa.Table(
     sa.Column("record_hash", sa.Text, nullable=False, unique=True),
 )
 
+_log_anchors_tbl = sa.Table(
+    "log_anchors",
+    _metadata,
+    sa.Column("id", sa.Integer, primary_key=True, autoincrement=True),
+    sa.Column("agent_id", sa.Text, nullable=False),
+    sa.Column("chain_head_hash", sa.Text, nullable=False),
+    sa.Column("anchored_at", sa.Text, nullable=False),
+    sa.Column("server_signature", sa.Text, nullable=False),
+)
+
+_risk_scores_tbl = sa.Table(
+    "risk_scores",
+    _metadata,
+    sa.Column("id", sa.Integer, primary_key=True, autoincrement=True),
+    sa.Column("hostname", sa.Text, nullable=False, unique=True),
+    sa.Column("score", sa.Integer, default=0),
+    sa.Column("window_start", sa.Text, nullable=False),
+    sa.Column("window_end", sa.Text, nullable=False),
+    sa.Column("updated_at", sa.Text, nullable=False),
+)
+
+_device_baseline_tbl = sa.Table(
+    "device_baseline",
+    _metadata,
+    sa.Column("id", sa.Integer, primary_key=True, autoincrement=True),
+    sa.Column("hostname", sa.Text, nullable=False),
+    sa.Column("device_id", sa.Text, nullable=False),
+    sa.Column("first_seen", sa.Text, nullable=False),
+    sa.Column("last_seen", sa.Text, nullable=False),
+    sa.Column("seen_count", sa.Integer, default=1),
+)
+
+_agent_integrity_tbl = sa.Table(
+    "agent_integrity",
+    _metadata,
+    sa.Column("id", sa.Integer, primary_key=True, autoincrement=True),
+    sa.Column("agent_id", sa.Text, nullable=False, unique=True),
+    sa.Column("trusted_hash", sa.Text, nullable=False),
+    sa.Column("registered_at", sa.Text, nullable=False),
+)
+
 
 def init_db() -> None:
     """Create tables and indexes if they don't exist.  Safe to call every startup."""
@@ -417,3 +458,223 @@ def get_timeline(
 
     combined = sorted(events_out + alerts_out, key=lambda x: x["ts"])
     return combined[:limit]
+
+
+# ---------------------------------------------------------------------------
+# Remote log anchoring
+# ---------------------------------------------------------------------------
+
+def insert_anchor(agent_id: str, chain_head_hash: str) -> str:
+    """Sign chain_head_hash with server's RSA private key (or HMAC fallback) and store anchor."""
+    from server.config import TLS_KEY, API_SECRET_KEY
+    import os, hashlib, hmac
+
+    sig = ""
+    # Try RSA signing with TLS key
+    if os.path.exists(TLS_KEY):
+        try:
+            from cryptography.hazmat.primitives import hashes, serialization
+            from cryptography.hazmat.primitives.asymmetric import padding
+            with open(TLS_KEY, "rb") as f:
+                private_key = serialization.load_pem_private_key(f.read(), password=None)
+            signature_bytes = private_key.sign(
+                chain_head_hash.encode(),
+                padding.PKCS1v15(),
+                hashes.SHA256(),
+            )
+            sig = signature_bytes.hex()
+        except Exception:
+            sig = ""
+
+    # Fallback: HMAC-SHA256 with API key
+    if not sig:
+        key = hashlib.sha256((API_SECRET_KEY or "itdn-default-anchor-key").encode()).digest()
+        sig = hmac.new(key, chain_head_hash.encode(), hashlib.sha256).hexdigest()
+
+    now = _utcnow()
+    with _lock:
+        with _get_engine().begin() as conn:
+            conn.execute(
+                _log_anchors_tbl.insert().values(
+                    agent_id=agent_id,
+                    chain_head_hash=chain_head_hash,
+                    anchored_at=now,
+                    server_signature=sig,
+                )
+            )
+    return sig
+
+
+def get_anchors(agent_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+    """Return anchor records for agent_id."""
+    with _lock:
+        with _get_engine().connect() as conn:
+            rows = conn.execute(
+                text(
+                    "SELECT * FROM log_anchors WHERE agent_id=:agent_id "
+                    "ORDER BY id DESC LIMIT :limit"
+                ),
+                {"agent_id": agent_id, "limit": limit},
+            ).mappings().fetchall()
+    return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Risk scoring
+# ---------------------------------------------------------------------------
+
+def upsert_risk_score(hostname: str, delta_score: int) -> None:
+    """Add delta_score to the 24h rolling cumulative score for hostname."""
+    now = _utcnow()
+    window_start = _cutoff(86400)
+    with _lock:
+        with _get_engine().begin() as conn:
+            row = conn.execute(
+                text("SELECT id, score FROM risk_scores WHERE hostname=:hostname"),
+                {"hostname": hostname},
+            ).fetchone()
+            if row:
+                new_score = (row[1] or 0) + delta_score
+                conn.execute(
+                    text(
+                        "UPDATE risk_scores SET score=:score, window_end=:we, updated_at=:ua "
+                        "WHERE hostname=:hostname"
+                    ),
+                    {"score": new_score, "we": now, "ua": now, "hostname": hostname},
+                )
+            else:
+                conn.execute(
+                    _risk_scores_tbl.insert().values(
+                        hostname=hostname,
+                        score=delta_score,
+                        window_start=window_start,
+                        window_end=now,
+                        updated_at=now,
+                    )
+                )
+
+
+def get_risk_score(hostname: str) -> int:
+    """Return the current cumulative risk score for hostname."""
+    with _lock:
+        with _get_engine().connect() as conn:
+            row = conn.execute(
+                text("SELECT score FROM risk_scores WHERE hostname=:hostname"),
+                {"hostname": hostname},
+            ).fetchone()
+    return row[0] if row else 0
+
+
+# ---------------------------------------------------------------------------
+# Device baseline
+# ---------------------------------------------------------------------------
+
+def update_device_baseline(hostname: str, device_id: str) -> None:
+    """Upsert baseline record: insert on first sight, update last_seen + seen_count after."""
+    now = _utcnow()
+    with _lock:
+        with _get_engine().begin() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT id, seen_count FROM device_baseline "
+                    "WHERE hostname=:hostname AND device_id=:device_id"
+                ),
+                {"hostname": hostname, "device_id": device_id},
+            ).fetchone()
+            if row:
+                conn.execute(
+                    text(
+                        "UPDATE device_baseline SET last_seen=:ls, seen_count=:sc "
+                        "WHERE id=:id"
+                    ),
+                    {"ls": now, "sc": (row[1] or 0) + 1, "id": row[0]},
+                )
+            else:
+                conn.execute(
+                    _device_baseline_tbl.insert().values(
+                        hostname=hostname,
+                        device_id=device_id,
+                        first_seen=now,
+                        last_seen=now,
+                        seen_count=1,
+                    )
+                )
+
+
+def get_device_baseline(hostname: str) -> List[Dict[str, Any]]:
+    """Return all baseline device records for hostname."""
+    with _lock:
+        with _get_engine().connect() as conn:
+            rows = conn.execute(
+                text(
+                    "SELECT * FROM device_baseline WHERE hostname=:hostname "
+                    "ORDER BY first_seen ASC"
+                ),
+                {"hostname": hostname},
+            ).mappings().fetchall()
+    return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Cross-agent device correlation
+# ---------------------------------------------------------------------------
+
+def get_recent_events_by_device(device_id: str, window_secs: int) -> List[Dict[str, Any]]:
+    """Return recent events for a device_id across all hosts."""
+    cutoff = _cutoff(window_secs)
+    with _lock:
+        with _get_engine().connect() as conn:
+            rows = conn.execute(
+                text(
+                    "SELECT * FROM events "
+                    "WHERE device_id=:device_id AND received_at >= :cutoff "
+                    "ORDER BY received_at ASC"
+                ),
+                {"device_id": device_id, "cutoff": cutoff},
+            ).mappings().fetchall()
+    return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Agent integrity
+# ---------------------------------------------------------------------------
+
+def register_agent_hash(agent_id: str, agent_hash: str) -> None:
+    """Register or update the trusted hash for agent_id."""
+    now = _utcnow()
+    with _lock:
+        with _get_engine().begin() as conn:
+            row = conn.execute(
+                text("SELECT id FROM agent_integrity WHERE agent_id=:agent_id"),
+                {"agent_id": agent_id},
+            ).fetchone()
+            if row:
+                conn.execute(
+                    text(
+                        "UPDATE agent_integrity SET trusted_hash=:hash, registered_at=:ra "
+                        "WHERE agent_id=:agent_id"
+                    ),
+                    {"hash": agent_hash, "ra": now, "agent_id": agent_id},
+                )
+            else:
+                conn.execute(
+                    _agent_integrity_tbl.insert().values(
+                        agent_id=agent_id,
+                        trusted_hash=agent_hash,
+                        registered_at=now,
+                    )
+                )
+
+
+def check_agent_hash(agent_id: str, agent_hash: str) -> tuple:
+    """Check if agent_hash matches the stored trusted hash. Returns (trusted, stored_hash)."""
+    with _lock:
+        with _get_engine().connect() as conn:
+            row = conn.execute(
+                text("SELECT trusted_hash FROM agent_integrity WHERE agent_id=:agent_id"),
+                {"agent_id": agent_id},
+            ).fetchone()
+    if not row:
+        return False, ""
+    stored = row[0]
+    return stored == agent_hash, stored

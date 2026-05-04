@@ -12,6 +12,22 @@ version: "3.9"
 # The agent container uses --privileged + host network to access USB devices.
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: itdn-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: itdn
+      POSTGRES_USER: itdn
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-itdn-dev-password}"
+    volumes:
+      - itdn-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U itdn -d itdn"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   server:
     build:
       context: .
@@ -21,10 +37,12 @@ services:
     ports:
       - "8443:8443"
     volumes:
-      - itdn-db:/var/lib/itdn
       - itdn-logs:/var/log/itdn
+    depends_on:
+      postgres:
+        condition: service_healthy
     environment:
-      ITDN_DB_PATH: /var/lib/itdn/itdn.db
+      ITDN_DATABASE_URL: "postgresql+psycopg2://itdn:${POSTGRES_PASSWORD:-itdn-dev-password}@postgres:5432/itdn"
       ITDN_SERVER_HOST: "0.0.0.0"
       ITDN_SERVER_PORT: "8443"
       # Set these in a .env file or secret manager:
@@ -63,6 +81,6 @@ services:
       ITDN_LOG_LEVEL: "INFO"
 
 volumes:
-  itdn-db:
+  itdn-pgdata:
   itdn-logs:
   itdn-agent-logs:

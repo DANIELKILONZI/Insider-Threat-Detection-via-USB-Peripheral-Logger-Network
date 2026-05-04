@@ -153,6 +153,42 @@ def rule_rapid_cycle(event: EventDict, db: Any) -> Optional[Alert]:
     return None
 
 
+def rule_cross_agent_device(event: EventDict, db: Any) -> Optional[Alert]:
+    """Fire when the same device_id appears on a different host within the last hour."""
+    device_id = event.get("device_id", "")
+    hostname = event.get("hostname", "")
+    if not device_id or not hostname:
+        return None
+    recent = db.get_recent_events_by_device(device_id, window_secs=3600)
+    other_hosts = {r["hostname"] for r in recent if r["hostname"] != hostname}
+    if other_hosts:
+        return Alert(
+            rule_name="cross_agent_device",
+            severity="CRITICAL",
+            description=(
+                f"Device {device_id} seen on multiple hosts within 1 hour "
+                f"(also on: {', '.join(sorted(other_hosts))}) – possible lateral movement."
+            ),
+        )
+    return None
+
+
+def rule_honeypot_device(event: EventDict, db: Any) -> Optional[Alert]:
+    """Fire when a known honeypot device is connected."""
+    from server.honeypot import is_honeypot_device
+    device_id = event.get("device_id", "")
+    if device_id and is_honeypot_device(device_id):
+        return Alert(
+            rule_name="honeypot_device",
+            severity="CRITICAL",
+            description=(
+                f"Honeypot device triggered: {device_id} connected to "
+                f"{event.get('hostname', 'unknown')} – possible device cloning attack."
+            ),
+        )
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -162,6 +198,8 @@ _RULES = [
     rule_unknown_device,
     rule_high_volume_transfer,
     rule_rapid_cycle,
+    rule_cross_agent_device,
+    rule_honeypot_device,
 ]
 
 

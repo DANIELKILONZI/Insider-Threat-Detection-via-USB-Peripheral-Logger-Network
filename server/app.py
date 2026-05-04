@@ -107,8 +107,20 @@ def ingest_events():
             db.append_audit_record(event.get("hostname", ""), event)
             splunk.forward_event(event)
             es.forward_event(event)
+            # Update device baseline and compute risk score
+            hostname = event.get("hostname", "")
+            device_id = event.get("device_id", "")
+            if hostname and device_id:
+                db.update_device_baseline(hostname, device_id)
             if alerts:
                 process_alerts(event, alerts)
+                from server.risk_scoring import RiskScorer
+                scorer = RiskScorer(db)
+                risk_score = scorer.score_event(hostname, alerts)
+                if risk_score > 100:
+                    logger.critical(
+                        "HIGH RISK: host %s cumulative risk score=%d", hostname, risk_score
+                    )
         except Exception:  # pylint: disable=broad-except
             logger.exception("Failed to process event: %s", event)
 
@@ -225,6 +237,129 @@ def health():
 def metrics():
     from flask import Response
     return Response(METRICS.render(), status=200, mimetype="text/plain; version=0.0.4")
+
+
+# ---------------------------------------------------------------------------
+# Remote log anchoring
+# ---------------------------------------------------------------------------
+
+@app.route("/api/v1/anchor", methods=["POST"])
+@require_api_key
+def anchor_chain():
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"error": "Request body required"}), 400
+    agent_id = data.get("agent_id", "")
+    chain_head_hash = data.get("chain_head_hash", "")
+    if not agent_id or not chain_head_hash:
+        return jsonify({"error": "agent_id and chain_head_hash required"}), 400
+    sig = db.insert_anchor(agent_id, chain_head_hash)
+    return jsonify({"ok": True, "signature": sig, "anchored_at": db._utcnow()}), 200
+
+
+@app.route("/api/v1/anchors", methods=["GET"])
+def get_anchors_endpoint():
+    agent_id = request.args.get("agent_id")
+    if not agent_id:
+        return jsonify({"error": "agent_id query parameter required"}), 400
+    limit = int(request.args.get("limit", 100))
+    anchors = db.get_anchors(agent_id, limit=limit)
+    return jsonify({"anchors": anchors, "count": len(anchors)}), 200
+
+
+# ---------------------------------------------------------------------------
+# Risk scoring
+# ---------------------------------------------------------------------------
+
+@app.route("/api/v1/risk", methods=["GET"])
+def get_risk():
+    hostname = request.args.get("hostname")
+    if not hostname:
+        return jsonify({"error": "hostname query parameter required"}), 400
+    score = db.get_risk_score(hostname)
+    return jsonify({"hostname": hostname, "risk_score": score}), 200
+
+
+# ---------------------------------------------------------------------------
+# Device baseline
+# ---------------------------------------------------------------------------
+
+@app.route("/api/v1/baseline", methods=["GET"])
+def get_baseline():
+    hostname = request.args.get("hostname")
+    if not hostname:
+        return jsonify({"error": "hostname query parameter required"}), 400
+    baseline = db.get_device_baseline(hostname)
+    return jsonify({"hostname": hostname, "baseline": baseline, "count": len(baseline)}), 200
+
+
+# ---------------------------------------------------------------------------
+# Anomaly detection
+# ---------------------------------------------------------------------------
+
+@app.route("/api/v1/anomaly", methods=["GET"])
+def get_anomaly():
+    hostname = request.args.get("hostname")
+    if not hostname:
+        return jsonify({"error": "hostname query parameter required"}), 400
+    from server.anomaly import AnomalyDetector
+    recent = db.get_recent_events(hostname, window_secs=3600)
+    detector = AnomalyDetector()
+    if len(recent) >= 2:
+        detector.fit(recent[:-1])
+        score = detector.score(recent[-1], recent[:-1])
+    elif recent:
+        score = 0.0
+    else:
+        score = 0.0
+    return jsonify({"hostname": hostname, "anomaly_score": score, "event_count": len(recent)}), 200
+
+
+# ---------------------------------------------------------------------------
+# Attack graph
+# ---------------------------------------------------------------------------
+
+@app.route("/api/v1/attack_graph", methods=["GET"])
+def get_attack_graph():
+    hostname = request.args.get("hostname")
+    if not hostname:
+        return jsonify({"error": "hostname query parameter required"}), 400
+    from server.attack_graph import build_attack_graph, detect_exfil_pattern
+    graph = build_attack_graph(hostname, db)
+    findings = detect_exfil_pattern(graph)
+    return jsonify({"hostname": hostname, "graph": graph, "findings": findings}), 200
+
+
+# ---------------------------------------------------------------------------
+# Agent integrity
+# ---------------------------------------------------------------------------
+
+@app.route("/api/v1/integrity/register", methods=["POST"])
+@require_api_key
+def integrity_register():
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"error": "Request body required"}), 400
+    agent_id = data.get("agent_id", "")
+    agent_hash = data.get("agent_hash", "")
+    if not agent_id or not agent_hash:
+        return jsonify({"error": "agent_id and agent_hash required"}), 400
+    db.register_agent_hash(agent_id, agent_hash)
+    return jsonify({"ok": True, "agent_id": agent_id}), 200
+
+
+@app.route("/api/v1/integrity/check", methods=["POST"])
+@require_api_key
+def integrity_check():
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"error": "Request body required"}), 400
+    agent_id = data.get("agent_id", "")
+    agent_hash = data.get("agent_hash", "")
+    if not agent_id or not agent_hash:
+        return jsonify({"error": "agent_id and agent_hash required"}), 400
+    trusted, stored_hash = db.check_agent_hash(agent_id, agent_hash)
+    return jsonify({"trusted": trusted, "stored_hash": stored_hash}), 200
 
 
 # ---------------------------------------------------------------------------

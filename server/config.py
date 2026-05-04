@@ -54,6 +54,9 @@ class _ServerSettings(BaseSettings):
     # ── API security ──────────────────────────────────────────────────────────
     ITDN_API_KEY: str = Field(default="")
 
+    # ── Honeypot detection ────────────────────────────────────────────────────
+    ITDN_HONEYPOT_VIDS: str = Field(default="")
+
     # ── Rate limiting ─────────────────────────────────────────────────────────
     ITDN_RATE_LIMIT_MAX: int = Field(default=200, gt=0)
     ITDN_RATE_LIMIT_WINDOW_SECS: int = Field(default=60, gt=0)
@@ -86,3 +89,5 @@ ALERT_DEDUP_WINDOW_SECS: int = _s.ITDN_ALERT_DEDUP_SECS
 API_SECRET_KEY: str = _s.ITDN_API_KEY
 RATE_LIMIT_MAX: int = _s.ITDN_RATE_LIMIT_MAX
 RATE_LIMIT_WINDOW_SECS: int = _s.ITDN_RATE_LIMIT_WINDOW_SECS
+
+HONEYPOT_VIDS: str = _s.ITDN_HONEYPOT_VIDS

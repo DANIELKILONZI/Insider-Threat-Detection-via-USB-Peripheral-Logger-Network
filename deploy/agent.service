@@ -1,0 +1,18 @@
+[Unit]
+Description=ITDN Endpoint Agent
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=5
+ExecStart=/usr/bin/python3 -m agent.main
+WorkingDirectory=/opt/itdn
+EnvironmentFile=-/etc/itdn/agent.env
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=itdn-agent
+
+[Install]
+WantedBy=multi-user.target

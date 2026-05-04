@@ -46,6 +46,9 @@ class _AgentSettings(BaseSettings):
     ITDN_POLL_INTERVAL: float = Field(default=2.0, gt=0)
     ITDN_BT_ENABLED: bool = Field(default=True)
 
+    # ── Anchor scheduling ─────────────────────────────────────────────────────
+    ITDN_ANCHOR_INTERVAL: int = Field(default=300, gt=0)
+
     # ── Audit log encryption ──────────────────────────────────────────────────
     # Optional 32-byte hex key (64 hex chars) for AES-256-GCM encryption of the
     # local audit log.  Leave empty to store plaintext (default / dev mode).
@@ -72,3 +75,5 @@ POLL_INTERVAL: float = _s.ITDN_POLL_INTERVAL
 BT_MONITOR_ENABLED: bool = _s.ITDN_BT_ENABLED
 
 LOG_KEY: str = _s.ITDN_LOG_KEY
+
+ANCHOR_INTERVAL: int = _s.ITDN_ANCHOR_INTERVAL

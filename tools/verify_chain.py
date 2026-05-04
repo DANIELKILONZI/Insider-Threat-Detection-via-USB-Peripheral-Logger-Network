@@ -167,7 +167,35 @@ def _build_parser() -> argparse.ArgumentParser:
         "--limit", metavar="N", type=int, default=10_000,
         help="Maximum number of records to fetch from the server (default: 10000).",
     )
+    parser.add_argument(
+        "--anchors", action="store_true",
+        help="Also display remote log anchors for the hostname (requires --server).",
+    )
     return parser
+
+
+def _show_anchors(server_url: str, hostname: str, ca_cert: Optional[str]) -> None:
+    """Fetch and display remote log anchors for hostname."""
+    url = f"{server_url.rstrip('/')}/api/v1/anchors?agent_id={hostname}&limit=20"
+    ctx = ssl.create_default_context()
+    if ca_cert:
+        ctx.load_verify_locations(ca_cert)
+    try:
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req, context=ctx, timeout=30) as resp:
+            body = json.loads(resp.read())
+    except Exception as exc:  # pylint: disable=broad-except
+        print(f"\n  WARNING: could not fetch anchors: {exc}", file=sys.stderr)
+        return
+    anchors = body.get("anchors", [])
+    print(f"\n  Remote anchors for '{hostname}': {len(anchors)} record(s)")
+    for a in anchors[:5]:
+        print(
+            f"    • {a.get('anchored_at', '?')} – hash {a.get('chain_head_hash', '?')[:16]}… "
+            f"sig {a.get('server_signature', '?')[:16]}…"
+        )
+    if len(anchors) > 5:
+        print(f"    … and {len(anchors) - 5} more")
 
 
 def main() -> None:
@@ -205,7 +233,17 @@ def main() -> None:
         sys.exit(1)
     else:
         print(f"  ✓ Chain is intact ({len(records)} records verified)")
+
+    # Show remote anchors if requested
+    if getattr(args, "anchors", False):
+        if not args.server or not args.hostname:
+            print("\n  WARNING: --anchors requires both --server and --hostname", file=sys.stderr)
+        else:
+            _show_anchors(args.server, args.hostname, getattr(args, "ca_cert", None))
+
+    if not errors:
         sys.exit(0)
+    sys.exit(1)
 
 
 if __name__ == "__main__":
