@@ -25,6 +25,7 @@ import logging
 from typing import Any, Dict, List, NamedTuple, Optional
 
 from server.rule_config import get_config
+from server.metrics import METRICS
 
 logger = logging.getLogger(__name__)
 
@@ -177,6 +178,7 @@ def evaluate(event: EventDict, db: Any) -> List[Alert]:
             result = rule_fn(event, db)
             if result is not None:
                 alerts.append(result)
+                METRICS.inc_rule_fire(result.rule_name)
                 logger.info(
                     "Rule '%s' fired [%s]: %s",
                     result.rule_name,

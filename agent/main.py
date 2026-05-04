@@ -13,10 +13,9 @@ import os
 import signal
 import sys
 
-logging.basicConfig(
-    level=os.environ.get("ITDN_LOG_LEVEL", "INFO"),
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
+from agent.logging_config import setup_logging
+
+setup_logging()
 
 logger = logging.getLogger(__name__)
 

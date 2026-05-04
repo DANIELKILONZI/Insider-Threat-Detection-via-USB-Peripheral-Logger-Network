@@ -49,9 +49,12 @@ import os
 from flask import Flask, jsonify, render_template, request
 
 import server.database as db
+import server.es_forwarder as es
 import server.splunk_forwarder as splunk
 from server.alert_manager import process_alerts
 from server.auth import rate_limit, require_api_key
+from server.logging_config import setup_logging
+from server.metrics import METRICS
 from server.rule_config import get_config, update_config
 from server.rules import evaluate
 from server.schema import EventBatch
@@ -95,11 +98,15 @@ def ingest_events():
     stored = 0
     for event in events:
         try:
+            # Evaluate rules BEFORE inserting so device_is_new returns True
+            # for the very first occurrence of a device on a host.
+            alerts = evaluate(event, db)
             db.insert_event(event)
             stored += 1
+            METRICS.inc_events_ingested()
             db.append_audit_record(event.get("hostname", ""), event)
             splunk.forward_event(event)
-            alerts = evaluate(event, db)
+            es.forward_event(event)
             if alerts:
                 process_alerts(event, alerts)
         except Exception:  # pylint: disable=broad-except
@@ -152,6 +159,26 @@ def audit_chain():
 
 
 # ---------------------------------------------------------------------------
+# Timeline
+# ---------------------------------------------------------------------------
+
+@app.route("/api/v1/timeline", methods=["GET"])
+def timeline():
+    hostname = request.args.get("hostname") or None
+    device_id = request.args.get("device_id") or None
+    since = request.args.get("since") or None
+    limit = int(request.args.get("limit", 500))
+
+    items = db.get_timeline(
+        hostname=hostname,
+        device_id=device_id,
+        since=since,
+        limit=limit,
+    )
+    return jsonify({"items": items, "count": len(items)}), 200
+
+
+# ---------------------------------------------------------------------------
 # Runtime config
 # ---------------------------------------------------------------------------
 
@@ -191,12 +218,27 @@ def health():
 
 
 # ---------------------------------------------------------------------------
+# Prometheus metrics
+# ---------------------------------------------------------------------------
+
+@app.route("/metrics", methods=["GET"])
+def metrics():
+    from flask import Response
+    return Response(METRICS.render(), status=200, mimetype="text/plain; version=0.0.4")
+
+
+# ---------------------------------------------------------------------------
 # Bootstrap
 # ---------------------------------------------------------------------------
 
 def create_app() -> Flask:
     """Application factory – initialises the DB and returns the Flask app."""
+    setup_logging()
     db.init_db()
+    # Register active-alert gauge callback
+    METRICS.set_active_alert_callback(
+        lambda: len(db.list_alerts(acknowledged=False, limit=100_000))
+    )
     return app
 
 

@@ -93,7 +93,9 @@ def verify_chain(records: List[Dict[str, Any]]) -> List[str]:
 # ---------------------------------------------------------------------------
 
 def _load_from_file(path: str) -> List[Dict[str, Any]]:
-    """Read a local JSON-Lines agent log."""
+    """Read a local JSON-Lines agent log, decrypting records if necessary."""
+    from agent.crypto import decrypt_record
+
     records: List[Dict[str, Any]] = []
     try:
         with open(path, encoding="utf-8") as fh:
@@ -102,9 +104,12 @@ def _load_from_file(path: str) -> List[Dict[str, Any]]:
                 if not line:
                     continue
                 try:
-                    records.append(json.loads(line))
-                except json.JSONDecodeError as exc:
-                    print(f"  WARNING: line {lineno} is not valid JSON – {exc}", file=sys.stderr)
+                    records.append(decrypt_record(line))
+                except (json.JSONDecodeError, ValueError) as exc:
+                    print(f"  WARNING: line {lineno} could not be parsed/decrypted – {exc}", file=sys.stderr)
+                except RuntimeError as exc:
+                    print(f"  ERROR: line {lineno} is encrypted but no key provided – {exc}", file=sys.stderr)
+                    sys.exit(2)
     except OSError as exc:
         print(f"ERROR: cannot open file {path!r}: {exc}", file=sys.stderr)
         sys.exit(2)

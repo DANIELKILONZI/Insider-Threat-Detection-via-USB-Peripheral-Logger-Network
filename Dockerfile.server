@@ -5,17 +5,23 @@ LABEL description="ITDN Central Server"
 
 WORKDIR /app
 
+# Create a non-root system user to run the server
+RUN groupadd --system itdn && useradd --system --gid itdn --no-create-home itdn
+
 COPY requirements.txt .
-RUN pip install --no-cache-dir flask>=3.0
+RUN pip install --no-cache-dir -r requirements.txt
 
-COPY server/ ./server/
+COPY --chown=itdn:itdn server/ ./server/
 
-# Ensure DB and log directories exist
-RUN mkdir -p /var/lib/itdn /var/log/itdn
+# Ensure DB and log directories exist and are owned by the service user
+RUN mkdir -p /var/lib/itdn /var/log/itdn \
+    && chown -R itdn:itdn /var/lib/itdn /var/log/itdn
 
 ENV ITDN_DB_PATH=/var/lib/itdn/itdn.db
 ENV ITDN_SERVER_HOST=0.0.0.0
 ENV ITDN_SERVER_PORT=8443
+
+USER itdn
 
 EXPOSE 8443
 

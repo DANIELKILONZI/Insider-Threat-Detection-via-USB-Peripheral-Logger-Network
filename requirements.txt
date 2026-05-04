@@ -2,6 +2,13 @@
 flask>=3.0,<4.0
 sqlalchemy>=2.0,<3.0
 pydantic>=2.0,<3.0
+pydantic-settings>=2.0,<3.0
+
+# ── Structured JSON logging ───────────────────────────────────────────────────
+python-json-logger>=2.0,<4.0
+
+# ── Audit-log encryption at rest (AES-GCM) ───────────────────────────────────
+cryptography>=41.0,<46.0
 
 # ── Agent optional dependencies (install on Linux endpoints) ──────────────────
 # pyudev>=0.24        # Linux udev USB events (highly recommended on Linux)

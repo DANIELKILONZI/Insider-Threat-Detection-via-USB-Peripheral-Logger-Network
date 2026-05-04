@@ -4,6 +4,11 @@ agent/logger.py – Local tamper-evident event logger.
 Writes JSON-Lines to a local log file and maintains a running SHA-256
 hash chain so that any post-hoc tampering is detectable.  The chain root
 hash is printed to stdout on clean shutdown so it can be stored out-of-band.
+
+When ``ITDN_LOG_KEY`` is set to a 64-hex-character AES-256 key, each record
+is encrypted with AES-256-GCM before being written to disk (see
+``agent/crypto.py``).  Chain integrity is computed on the plaintext so it
+is preserved regardless of whether encryption is enabled.
 """
 
 from __future__ import annotations
@@ -16,6 +21,7 @@ import threading
 from typing import Any, Dict
 
 from agent.config import LOCAL_LOG_DIR, LOCAL_LOG_FILE
+from agent.crypto import decrypt_record, encrypt_record, is_encryption_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +36,10 @@ class LocalAuditLogger:
         - The event payload
         - The SHA-256 hash of the *previous* record (``prev_hash``)
         - The SHA-256 hash of *this* record (``record_hash``)
+
+    When ``ITDN_LOG_KEY`` is configured the record is AES-256-GCM encrypted
+    before being appended; the hashes are still computed on plaintext so
+    the chain can be verified after decryption.
 
     Replaying the log and recomputing hashes allows any gaps or
     modifications to be detected.
@@ -56,7 +66,7 @@ class LocalAuditLogger:
                     if line.strip():
                         last_line = line
             if last_line:
-                record = json.loads(last_line)
+                record = decrypt_record(last_line.decode("utf-8"))
                 self._prev_hash = record.get("record_hash", _GENESIS_HASH)
         except Exception:  # pylint: disable=broad-except
             logger.warning("Could not read tail hash from existing log; starting fresh chain")
@@ -86,8 +96,13 @@ class LocalAuditLogger:
             record["record_hash"] = record_hash
 
             try:
+                if is_encryption_enabled():
+                    line = encrypt_record(record)
+                else:
+                    line = json.dumps(record)
+
                 with open(LOCAL_LOG_FILE, "a", encoding="utf-8") as fh:
-                    fh.write(json.dumps(record) + "\n")
+                    fh.write(line + "\n")
             except OSError as exc:
                 logger.error("Failed to write local audit log: %s", exc)
                 raise

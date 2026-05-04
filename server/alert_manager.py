@@ -12,8 +12,10 @@ import logging
 from typing import Any, Dict
 
 import server.database as db
+import server.es_forwarder as es
 import server.splunk_forwarder as splunk
 from server.config import ALERT_DEDUP_WINDOW_SECS
+from server.metrics import METRICS
 from server.rules import Alert
 
 logger = logging.getLogger(__name__)
@@ -51,6 +53,7 @@ def process_alerts(event: EventDict, alerts: list[Alert]) -> None:
             description=alert.description,
             raw_event=event,
         )
+        METRICS.inc_alerts_fired(alert.severity, alert.rule_name)
         logger.warning(
             "[ALERT id=%d] [%s] %s: %s",
             alert_id,
@@ -69,3 +72,4 @@ def process_alerts(event: EventDict, alerts: list[Alert]) -> None:
             "event": event,
         }
         splunk.forward_alert(alert_payload)
+        es.forward_alert(alert_payload)

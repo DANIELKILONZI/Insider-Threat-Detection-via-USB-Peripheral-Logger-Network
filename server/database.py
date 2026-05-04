@@ -336,3 +336,84 @@ def get_audit_chain(hostname: str, limit: int = 500) -> List[Dict[str, Any]]:
                 {"hostname": hostname, "limit": limit},
             ).mappings().fetchall()
     return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Timeline (combined events + alerts for incident review)
+# ---------------------------------------------------------------------------
+
+def get_timeline(
+    hostname: Optional[str] = None,
+    device_id: Optional[str] = None,
+    since: Optional[str] = None,
+    limit: int = 500,
+) -> List[Dict[str, Any]]:
+    """
+    Return a chronological list of events and alerts for a host / device,
+    interleaved and sorted by timestamp.
+
+    Each item carries a ``_kind`` field (``"event"`` or ``"alert"``) so
+    callers can distinguish the two types.
+
+    Parameters
+    ----------
+    hostname:   Filter by hostname (optional).
+    device_id:  Filter by device_id (optional).
+    since:      ISO-8601 datetime string; return only records on or after
+                this timestamp (optional).
+    limit:      Maximum total rows returned (default 500).
+    """
+    conditions_e: list[str] = []
+    conditions_a: list[str] = []
+    params_e: Dict[str, Any] = {}
+    params_a: Dict[str, Any] = {}
+
+    if hostname:
+        conditions_e.append("hostname = :hostname")
+        conditions_a.append("hostname = :hostname")
+        params_e["hostname"] = hostname
+        params_a["hostname"] = hostname
+
+    if device_id:
+        conditions_e.append("device_id = :device_id")
+        conditions_a.append("device_id = :device_id")
+        params_e["device_id"] = device_id
+        params_a["device_id"] = device_id
+
+    if since:
+        conditions_e.append("received_at >= :since")
+        conditions_a.append("created_at >= :since")
+        params_e["since"] = since
+        params_a["since"] = since
+
+    where_e = ("WHERE " + " AND ".join(conditions_e)) if conditions_e else ""
+    where_a = ("WHERE " + " AND ".join(conditions_a)) if conditions_a else ""
+
+    params_e["limit"] = limit
+    params_a["limit"] = limit
+
+    with _lock:
+        with _get_engine().connect() as conn:
+            event_rows = conn.execute(
+                text(
+                    f"SELECT id, received_at AS ts, hostname, device_id, "
+                    f"event_type, transfer_bytes "
+                    f"FROM events {where_e} ORDER BY received_at ASC LIMIT :limit"
+                ),
+                params_e,
+            ).mappings().fetchall()
+
+            alert_rows = conn.execute(
+                text(
+                    f"SELECT id, created_at AS ts, hostname, device_id, "
+                    f"rule_name, severity, description, acknowledged "
+                    f"FROM alerts {where_a} ORDER BY created_at ASC LIMIT :limit"
+                ),
+                params_a,
+            ).mappings().fetchall()
+
+    events_out = [{"_kind": "event", **dict(r)} for r in event_rows]
+    alerts_out = [{"_kind": "alert", **dict(r)} for r in alert_rows]
+
+    combined = sorted(events_out + alerts_out, key=lambda x: x["ts"])
+    return combined[:limit]

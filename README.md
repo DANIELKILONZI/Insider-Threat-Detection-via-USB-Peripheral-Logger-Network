@@ -14,7 +14,10 @@
   - [Central Server](#central-server)
   - [Anomaly Detection Rules](#anomaly-detection-rules)
   - [Splunk Integration](#splunk-integration)
+  - [Elasticsearch Integration](#elasticsearch-integration)
   - [Audit Chain](#audit-chain)
+  - [SOC Dashboard](#soc-dashboard)
+  - [Prometheus Metrics](#prometheus-metrics)
 - [Quick Start (Docker Compose)](#quick-start-docker-compose)
 - [Production Deployment](#production-deployment)
 - [Configuration Reference](#configuration-reference)
@@ -38,6 +41,9 @@
  │                                      │  • Local     │  │
  │                                      │    hash-     │  │
  │                                      │    chain log │  │
+ │                                      │  • Disk-     │  │
+ │                                      │    backed    │  │
+ │                                      │    retry Q   │  │
  │                                      │  • mTLS      │  │
  │                                      │    transport │  │
  │                                      └──────┬───────┘  │
@@ -52,19 +58,21 @@
  │  │  /api/v1/      │─▶│   Engine   │─▶│   Manager    │  │
  │  │  events        │  │            │  │  (dedup)     │  │
  │  │  alerts        │  │ • After    │  └──────┬───────┘  │
- │  │  audit         │  │   hours    │         │          │
- │  └────────┬───────┘  │ • Unknown  │         ▼          │
- │           │          │   device   │  ┌──────────────┐  │
- │           ▼          │ • High vol │  │   Splunk HEC │  │
- │  ┌────────────────┐  │ • Rapid    │  │   Forwarder  │  │
- │  │  SQLite / DB   │  │   cycle    │  └──────────────┘  │
- │  │  • events      │  └────────────┘         │          │
- │  │  • alerts      │                          ▼          │
- │  │  • audit chain │               ┌──────────────────┐  │
- │  └────────────────┘               │  Splunk          │  │
- │                                   │  Enterprise      │  │
- └───────────────────────────────────│  Security        │  │
-                                     └──────────────────┘
+ │  │  timeline      │  │   hours    │         │          │
+ │  │  audit         │  │ • Unknown  │         ▼          │
+ │  │  config        │  │   device   │  ┌──────────────┐  │
+ │  │  metrics       │  │ • High vol │  │  Splunk HEC  │  │
+ │  └────────┬───────┘  │ • Rapid    │  │  ES Bulk API │  │
+ │           │          │   cycle    │  └──────────────┘  │
+ │           ▼          └────────────┘         │          │
+ │  ┌────────────────┐                          ▼          │
+ │  │  SQLite /      │               ┌──────────────────┐  │
+ │  │  PostgreSQL    │               │  Splunk / ELK    │  │
+ │  │  • events      │               │  Enterprise      │  │
+ │  │  • alerts      │               │  Security        │  │
+ │  │  • audit chain │               └──────────────────┘  │
+ │  └────────────────┘                                     │
+ └─────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -77,11 +85,14 @@ Located in `agent/`.
 
 | File | Purpose |
 |------|---------|
-| `agent/usb_monitor.py` | Real-time USB device monitoring via Linux udev (pyudev) or polling fallback for Windows |
+| `agent/usb_monitor.py` | Real-time USB device monitoring via Linux udev (pyudev) or WMI on Windows |
 | `agent/bt_monitor.py` | Bluetooth device monitoring via `bluetoothctl` (Linux) or WMI (Windows) |
-| `agent/logger.py` | Local tamper-evident JSON-Lines audit log with SHA-256 hash chaining |
-| `agent/transport.py` | Batched event transport over mTLS to the central server |
-| `agent/config.py` | All settings via environment variables |
+| `agent/logger.py` | Local tamper-evident JSON-Lines audit log with SHA-256 hash chaining; optional AES-256-GCM encryption at rest |
+| `agent/crypto.py` | AES-256-GCM encrypt/decrypt helpers for the audit log |
+| `agent/retry_queue.py` | SQLite-backed persistent retry queue – events survive agent restarts and network outages |
+| `agent/transport.py` | Batched event transport over mTLS to the central server with disk-backed retry |
+| `agent/logging_config.py` | Structured JSON logging setup |
+| `agent/config.py` | All settings via environment variables (Pydantic BaseSettings) |
 | `agent/main.py` | Entry point – starts all monitors and waits for SIGTERM/SIGINT |
 
 Each device event has the following schema:
@@ -106,12 +117,19 @@ Located in `server/`.
 
 | File | Purpose |
 |------|---------|
-| `server/app.py` | Flask REST API (ingest, alerts, audit endpoints) |
-| `server/database.py` | SQLite persistence: events, alerts, server-side audit chain |
+| `server/app.py` | Flask REST API (ingest, alerts, timeline, audit, config, metrics, dashboard) |
+| `server/database.py` | SQLAlchemy 2 persistence layer (SQLite default; PostgreSQL via `ITDN_DATABASE_URL`) |
 | `server/rules.py` | Anomaly detection rules engine |
-| `server/alert_manager.py` | Alert deduplication, persistence, and Splunk forwarding |
+| `server/alert_manager.py` | Alert deduplication, persistence, and forwarding |
 | `server/splunk_forwarder.py` | Splunk HTTP Event Collector (HEC) client |
-| `server/config.py` | All settings via environment variables |
+| `server/es_forwarder.py` | Elasticsearch Bulk API client (ELK alternative/complement) |
+| `server/auth.py` | Bearer-token API authentication + per-IP rate limiting |
+| `server/schema.py` | Pydantic v2 input validation for event batches |
+| `server/rule_config.py` | Runtime-adjustable detection thresholds |
+| `server/metrics.py` | In-process Prometheus-format metrics counters |
+| `server/logging_config.py` | Structured JSON logging setup |
+| `server/config.py` | All settings via environment variables (Pydantic BaseSettings) |
+| `server/templates/dashboard.html` | SOC alert dashboard |
 
 ### Anomaly Detection Rules
 
@@ -122,8 +140,8 @@ Located in `server/`.
 | `high_volume_transfer` | CRITICAL | Cumulative bytes transferred in last hour > 1 GB (configurable) |
 | `rapid_cycle` | HIGH | ≥ 5 connect/disconnect events within 5 minutes (tap-and-go exfil pattern) |
 
-All thresholds are configurable via environment variables – see
-[Configuration Reference](#configuration-reference).
+All thresholds are adjustable **at runtime** via `PATCH /api/v1/config` without
+redeploying the service, or at startup via environment variables.
 
 ### Splunk Integration
 
@@ -133,19 +151,57 @@ Event Collector (HEC):
 - **sourcetype `itdn:device_event`** – every raw USB/BT event
 - **sourcetype `itdn:alert`** – every fired anomaly alert
 
-Example Splunk saved searches and the `itdn` index definition are in
-`deploy/splunk_config/`.
+Example Splunk saved searches and the `itdn` index definition are in `deploy/splunk_config/`.
+
+### Elasticsearch Integration
+
+An optional Elasticsearch sink (`server/es_forwarder.py`) indexes events and
+alerts directly to an ELK cluster using the Elasticsearch Document API
+(no extra Python package required).
+
+Configure via:
+- `ES_URL` – cluster base URL, e.g. `https://es.internal:9200`
+- `ES_API_KEY` – `id:api_key` format (recommended)
+- `ES_EVENTS_INDEX` / `ES_ALERTS_INDEX` – destination index names
 
 ### Audit Chain
 
 Both the agent and the server maintain independent SHA-256 hash chains:
 
 - **Agent chain** (`/var/log/itdn/agent.log`): each JSON-Lines record includes
-  the hash of the previous record. Any modification to a historical record
-  breaks the chain, which is detectable by replaying the file.
-- **Server chain** (`audit_chain` table in SQLite): mirrors the same pattern
-  server-side so chain integrity can be verified even if an endpoint is
-  compromised.
+  the hash of the previous record. Detectable by replaying with
+  `tools/verify_chain.py`.
+- **Server chain** (`audit_chain` table): mirrors the same pattern server-side.
+
+**Optional encryption at rest**: set `ITDN_LOG_KEY` to a 64-hex-character
+AES-256 key to encrypt agent log records with AES-256-GCM.
+
+```bash
+# Generate a key
+python -c "import secrets; print(secrets.token_hex(32))"
+
+# Verify an encrypted or plaintext log
+ITDN_LOG_KEY=<hex-key> python -m tools.verify_chain --file /var/log/itdn/agent.log
+
+# Verify the server-side chain
+python -m tools.verify_chain --server https://siem.internal:8443 --hostname ws-042
+```
+
+### SOC Dashboard
+
+Available at `/dashboard` (also root `/`). Auto-refreshes every 30 seconds,
+shows open alerts with per-row ACK buttons.
+
+### Prometheus Metrics
+
+`GET /metrics` serves Prometheus text format:
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `itdn_events_ingested_total` | counter | Raw device events received |
+| `itdn_alerts_fired_total` | counter | Alerts persisted (labelled by `severity`, `rule_name`) |
+| `itdn_rule_fires_total` | counter | Rule fires before dedup (labelled by `rule_name`) |
+| `itdn_alerts_active` | gauge | Current unacknowledged alert count |
 
 ---
 
@@ -156,34 +212,58 @@ Both the agent and the server maintain independent SHA-256 hash chains:
 git clone https://github.com/DANIELKILONZI/Insider-Threat-Detection-via-USB-Peripheral-Logger-Network
 cd Insider-Threat-Detection-via-USB-Peripheral-Logger-Network
 
-# 2. Configure (optional – Splunk token, thresholds, etc.)
+# 2. Configure
 cp .env.example .env
 $EDITOR .env
 
 # 3. Start server + agent
 docker compose up --build
 
-# 4. Check server health
+# 4. Check health
 curl http://localhost:8443/api/v1/health
 # → {"status": "ok"}
 
 # 5. View alerts
 curl http://localhost:8443/api/v1/alerts | python -m json.tool
+
+# 6. SOC dashboard
+open http://localhost:8443/dashboard
+
+# 7. Prometheus metrics
+curl http://localhost:8443/metrics
+```
+
+### Enable API Authentication
+
+```bash
+# Generate a strong key and add to .env
+python -c "import secrets; print(secrets.token_hex(32))"
+# ITDN_API_KEY=<key>
+
+# Agents must send:  Authorization: Bearer <key>
+```
+
+### Switch to PostgreSQL
+
+```bash
+# In .env
+ITDN_DATABASE_URL=postgresql+psycopg2://itdn:secret@db:5432/itdn
 ```
 
 ---
 
 ## Production Deployment
 
-### Server
+### TLS Certificate Provisioning
 
-1. Provision a hardened Linux VM on an isolated VLAN (no internet access).
-2. Generate TLS certificates (CA + server cert + per-agent client certs).
-3. Set environment variables (see [Configuration Reference](#configuration-reference)).
-4. Run the Docker image or install as a systemd service:
+```bash
+# Generate CA + server cert + per-agent certs
+./deploy/gen_certs.sh agent-ws001 agent-ws002 agent-laptop01
+```
+
+### Server systemd service
 
 ```ini
-# /etc/systemd/system/itdn-server.service
 [Unit]
 Description=ITDN Central Server
 After=network.target
@@ -199,37 +279,10 @@ User=itdn
 WantedBy=multi-user.target
 ```
 
-### Endpoint Agent (1 000+ workstations)
-
-Deploy via your enterprise endpoint management tool (GPO, Ansible, SCCM):
+### Agent deployment via Ansible
 
 ```bash
-# Install on each Linux endpoint
-pip install pyudev
-
-# /etc/itdn/agent.env
-ITDN_SERVER_URL=https://siem.internal:8443
-ITDN_SERVER_CERT=/etc/itdn/ca.crt
-ITDN_AGENT_CERT=/etc/itdn/agent-ws042.crt
-ITDN_AGENT_KEY=/etc/itdn/agent-ws042.key
-ITDN_HOSTNAME=ws-classified-042
-```
-
-```ini
-# /etc/systemd/system/itdn-agent.service
-[Unit]
-Description=ITDN Endpoint Agent
-After=network.target
-
-[Service]
-EnvironmentFile=/etc/itdn/agent.env
-ExecStart=/usr/bin/python -m agent.main
-WorkingDirectory=/opt/itdn
-Restart=always
-User=root
-
-[Install]
-WantedBy=multi-user.target
+ansible-playbook deploy/ansible/deploy_agent.yml -i inventory.ini
 ```
 
 ---
@@ -246,27 +299,41 @@ WantedBy=multi-user.target
 | `ITDN_AGENT_KEY` | `/etc/itdn/agent.key` | Agent private key |
 | `ITDN_HOSTNAME` | system hostname | Override reported hostname |
 | `ITDN_LOG_DIR` | `/var/log/itdn` | Local audit log directory |
+| `ITDN_LOG_KEY` | _(empty)_ | 64-hex AES-256 key for audit-log encryption at rest |
+| `ITDN_RETRY_DB` | `\<ITDN_LOG_DIR\>/retry.db` | SQLite path for disk-backed retry queue |
 | `ITDN_FLUSH_INTERVAL` | `10` | Seconds between event flushes |
-| `ITDN_MAX_QUEUE_SIZE` | `500` | Max events buffered in memory |
+| `ITDN_MAX_QUEUE_SIZE` | `500` | Max events in retry queue before oldest is dropped |
 | `ITDN_POLL_INTERVAL` | `2.0` | USB poll interval (non-udev fallback) |
 | `ITDN_BT_ENABLED` | `true` | Enable Bluetooth monitoring |
+| `ITDN_LOG_LEVEL` | `INFO` | Log level |
+| `ITDN_LOG_JSON` | `true` | Emit structured JSON logs (`false` = plain text) |
 
 ### Server (`server/config.py`)
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ITDN_DB_PATH` | `/var/lib/itdn/itdn.db` | SQLite database path |
+| `ITDN_DATABASE_URL` | _(SQLite at DB_PATH)_ | Full SQLAlchemy URL; set for PostgreSQL |
 | `ITDN_SERVER_HOST` | `0.0.0.0` | Bind address |
 | `ITDN_SERVER_PORT` | `8443` | Bind port |
-| `SPLUNK_HEC_URL` | _(empty)_ | Splunk HEC endpoint URL |
-| `SPLUNK_HEC_TOKEN` | _(empty)_ | Splunk HEC authentication token |
+| `ITDN_API_KEY` | _(empty)_ | Bearer token for `POST /api/v1/events`; empty = disabled |
+| `ITDN_RATE_LIMIT_MAX` | `200` | Max requests per IP per window |
+| `ITDN_RATE_LIMIT_WINDOW_SECS` | `60` | Rate-limit window in seconds |
+| `SPLUNK_HEC_URL` | _(internal URL)_ | Splunk HEC endpoint |
+| `SPLUNK_HEC_TOKEN` | _(empty)_ | Splunk HEC token; empty = disabled |
 | `SPLUNK_INDEX` | `itdn` | Splunk destination index |
+| `ES_URL` | _(empty)_ | Elasticsearch base URL; empty = disabled |
+| `ES_API_KEY` | _(empty)_ | Elasticsearch API key |
+| `ES_EVENTS_INDEX` | `itdn-events` | ES index for raw events |
+| `ES_ALERTS_INDEX` | `itdn-alerts` | ES index for alerts |
 | `ITDN_AFTER_HOURS_START` | `22` | After-hours start (hour, 0–23) |
 | `ITDN_AFTER_HOURS_END` | `6` | After-hours end (hour, 0–23) |
 | `ITDN_VOLUME_THRESHOLD_BYTES` | `1073741824` | 1 GB/hr transfer alert threshold |
 | `ITDN_RAPID_CYCLE_COUNT` | `5` | Events within window to trigger rapid-cycle alert |
 | `ITDN_RAPID_CYCLE_WINDOW_SECS` | `300` | Rapid-cycle detection window (seconds) |
 | `ITDN_ALERT_DEDUP_SECS` | `3600` | Alert deduplication window (seconds) |
+| `ITDN_LOG_LEVEL` | `INFO` | Log level |
+| `ITDN_LOG_JSON` | `true` | Emit structured JSON logs |
 
 ---
 
@@ -274,106 +341,53 @@ WantedBy=multi-user.target
 
 ### `POST /api/v1/events`
 
-Ingest device events from agents.
-
-**Request body:**
-```json
-{
-  "events": [
-    {
-      "event_type": "connected",
-      "device_id": "0781:5567",
-      "hostname": "ws-042",
-      "timestamp": "2024-01-15T23:32:44Z",
-      "transfer_bytes": 0
-    }
-  ]
-}
-```
-
-**Response:**
-```json
-{"ok": true, "stored": 1}
-```
-
----
+Ingest device events from agents. Requires `Authorization: Bearer \<ITDN_API_KEY\>` when key is set.
 
 ### `GET /api/v1/alerts`
 
-List alerts.
+List alerts. Query params: `hostname`, `ack` (true/false), `limit`.
 
-**Query parameters:**
-- `hostname` – filter by host
-- `ack` – `true` or `false` to filter by acknowledgement status
-- `limit` – max results (default 200)
+### `PATCH /api/v1/alerts/\<id\>/ack`
 
-**Response:**
-```json
-{
-  "alerts": [
-    {
-      "id": 1,
-      "created_at": "2024-01-15 23:32:45",
-      "hostname": "ws-042",
-      "device_id": "0781:5567",
-      "rule_name": "after_hours_device",
-      "severity": "HIGH",
-      "description": "Device 0781:5567 connected at 23:32 on ws-042 – outside business hours.",
-      "acknowledged": 0
-    }
-  ],
-  "count": 1
-}
-```
+Acknowledge an alert. Returns `{"ok": true, "alert_id": \<id\>}`.
 
----
+### `GET /api/v1/timeline`
+
+Chronological incident timeline (events + alerts interleaved).
+Query params: `hostname`, `device_id`, `since` (ISO-8601), `limit`.
 
 ### `GET /api/v1/audit`
 
-Retrieve the server-side audit chain for a host.
+Server-side audit chain. Query params: `hostname` (required), `limit`.
 
-**Query parameters:**
-- `hostname` – **required**
-- `limit` – max records (default 500)
+### `GET /api/v1/config`
 
-**Response:**
-```json
-{
-  "hostname": "ws-042",
-  "count": 3,
-  "records": [
-    {
-      "id": 1,
-      "recorded_at": "2024-01-15 23:32:45",
-      "hostname": "ws-042",
-      "prev_hash": "0000...0000",
-      "event_json": "{...}",
-      "record_hash": "a3f2..."
-    }
-  ]
-}
-```
+Current runtime anomaly-detection thresholds.
 
----
+### `PATCH /api/v1/config`
+
+Update thresholds at runtime. Body: `{"rapid_cycle_count": 3, ...}`.
+
+### `GET /metrics`
+
+Prometheus-format metrics.
 
 ### `GET /api/v1/health`
 
-Liveness probe. Returns `{"status": "ok"}` with HTTP 200.
+Liveness probe. Returns `{"status": "ok"}`.
+
+### `GET /dashboard`
+
+SOC alert dashboard (HTML).
 
 ---
 
 ## Running Tests
 
 ```bash
-pip install flask pytest pytest-cov
+pip install -r requirements.txt
 python -m pytest tests/ -v
 ```
-
-All 33 tests cover:
-- Hash-chain integrity and tamper detection (audit logger)
-- All four anomaly detection rules
-- Alert deduplication logic
-- REST API endpoints (ingest, alerts, audit, health)
 
 ---
 
@@ -382,35 +396,56 @@ All 33 tests cover:
 ```
 .
 ├── agent/                      # Endpoint agent
-│   ├── config.py               # Agent configuration
-│   ├── usb_monitor.py          # USB event monitor (udev / poll)
+│   ├── config.py               # Pydantic BaseSettings configuration
+│   ├── crypto.py               # AES-256-GCM encryption helpers
+│   ├── logging_config.py       # Structured JSON logging
+│   ├── logger.py               # Tamper-evident audit log (+ optional encryption)
+│   ├── retry_queue.py          # SQLite-backed persistent retry queue
+│   ├── transport.py            # mTLS event transport with disk-backed retry
+│   ├── usb_monitor.py          # USB event monitor
 │   ├── bt_monitor.py           # Bluetooth event monitor
-│   ├── logger.py               # Local tamper-evident audit log
-│   ├── transport.py            # mTLS event transport
 │   └── main.py                 # Agent entry point
 │
 ├── server/                     # Central SIEM server
-│   ├── config.py               # Server configuration
-│   ├── database.py             # SQLite persistence layer
+│   ├── config.py               # Pydantic BaseSettings configuration
+│   ├── logging_config.py       # Structured JSON logging
+│   ├── database.py             # SQLAlchemy 2 (SQLite / PostgreSQL)
 │   ├── rules.py                # Anomaly detection rules engine
+│   ├── rule_config.py          # Runtime-adjustable thresholds
 │   ├── alert_manager.py        # Alert dedup and forwarding
+│   ├── schema.py               # Pydantic v2 input validation
+│   ├── auth.py                 # API key auth + rate limiting
+│   ├── metrics.py              # Prometheus-format metrics
 │   ├── splunk_forwarder.py     # Splunk HEC client
-│   └── app.py                  # Flask REST API
+│   ├── es_forwarder.py         # Elasticsearch client
+│   ├── app.py                  # Flask REST API
+│   └── templates/
+│       └── dashboard.html      # SOC alert dashboard
 │
 ├── tests/                      # Unit + integration tests
+│   ├── conftest.py
 │   ├── test_audit_logger.py
 │   ├── test_rules.py
 │   ├── test_alert_manager.py
-│   └── test_api.py
+│   ├── test_api.py
+│   ├── test_auth.py
+│   ├── test_schema.py
+│   ├── test_rule_config.py
+│   ├── test_ack_endpoint.py
+│   ├── test_verify_chain.py
+│   └── test_integration.py     # Full-stack integration (real SQLite)
+│
+├── tools/
+│   └── verify_chain.py         # Audit chain integrity verifier CLI
 │
 ├── deploy/
-│   └── splunk_config/
-│       ├── indexes.conf        # Splunk index definition
-│       └── saved_searches.conf # Splunk correlation searches
+│   ├── gen_certs.sh            # CA + server + agent cert provisioning
+│   ├── ansible/                # Ansible deployment playbook
+│   └── splunk_config/          # Splunk index + saved-search configs
 │
-├── Dockerfile.agent            # Agent container image
-├── Dockerfile.server           # Server container image
-├── docker-compose.yml          # Dev / small-scale deployment
-├── requirements.txt            # Python dependencies
-└── .env.example                # Environment variable template
+├── Dockerfile.agent            # Agent container (non-root user)
+├── Dockerfile.server           # Server container (non-root user)
+├── docker-compose.yml
+├── requirements.txt
+└── .env.example
 ```

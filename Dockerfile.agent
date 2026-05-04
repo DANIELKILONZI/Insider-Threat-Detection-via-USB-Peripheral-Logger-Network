@@ -5,14 +5,20 @@ LABEL description="ITDN Endpoint Agent"
 
 WORKDIR /app
 
-# Install pyudev for real-time Linux USB monitoring
-RUN pip install --no-cache-dir pyudev>=0.24
+# Create a non-root system user to run the agent
+RUN groupadd --system itdn && useradd --system --gid itdn --no-create-home itdn
 
-COPY agent/ ./agent/
+# Install pyudev for real-time Linux USB monitoring and other agent deps
+RUN pip install --no-cache-dir pyudev>=0.24 python-json-logger>=2.0 cryptography>=41.0
 
-RUN mkdir -p /var/log/itdn /etc/itdn
+COPY --chown=itdn:itdn agent/ ./agent/
+
+RUN mkdir -p /var/log/itdn /etc/itdn \
+    && chown -R itdn:itdn /var/log/itdn
 
 ENV ITDN_LOG_DIR=/var/log/itdn
 ENV ITDN_LOG_LEVEL=INFO
+
+USER itdn
 
 CMD ["python", "-m", "agent.main"]
