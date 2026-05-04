@@ -1,0 +1,18 @@
+FROM python:3.11-slim
+
+LABEL maintainer="ITDN Project"
+LABEL description="ITDN Endpoint Agent"
+
+WORKDIR /app
+
+# Install pyudev for real-time Linux USB monitoring
+RUN pip install --no-cache-dir pyudev>=0.24
+
+COPY agent/ ./agent/
+
+RUN mkdir -p /var/log/itdn /etc/itdn
+
+ENV ITDN_LOG_DIR=/var/log/itdn
+ENV ITDN_LOG_LEVEL=INFO
+
+CMD ["python", "-m", "agent.main"]

@@ -1,0 +1,22 @@
+FROM python:3.11-slim
+
+LABEL maintainer="ITDN Project"
+LABEL description="ITDN Central Server"
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir flask>=3.0
+
+COPY server/ ./server/
+
+# Ensure DB and log directories exist
+RUN mkdir -p /var/lib/itdn /var/log/itdn
+
+ENV ITDN_DB_PATH=/var/lib/itdn/itdn.db
+ENV ITDN_SERVER_HOST=0.0.0.0
+ENV ITDN_SERVER_PORT=8443
+
+EXPOSE 8443
+
+CMD ["python", "-m", "server.app"]

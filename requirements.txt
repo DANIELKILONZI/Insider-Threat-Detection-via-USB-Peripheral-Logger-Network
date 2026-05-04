@@ -1,0 +1,10 @@
+# ── Server dependencies ───────────────────────────────────────────────────────
+flask>=3.0,<4.0
+
+# ── Agent optional dependencies (install on Linux endpoints) ──────────────────
+# pyudev>=0.24        # Linux udev USB events (highly recommended on Linux)
+# wmi>=1.5.1          # Windows USB/Bluetooth enumeration (Windows only)
+
+# ── Testing ───────────────────────────────────────────────────────────────────
+pytest>=8.0
+pytest-cov>=5.0
