@@ -158,6 +158,40 @@
     }
     .ack-btn:hover { color: var(--ok); border-color: var(--ok); }
 
+    /* ── Risk score gauge ──────────────────────────────────────────────────── */
+    .risk-bar-wrap {
+      display: inline-block;
+      width: 100px;
+      height: 8px;
+      background: var(--border);
+      border-radius: 4px;
+      vertical-align: middle;
+      margin-right: 6px;
+    }
+    .risk-bar {
+      height: 100%;
+      border-radius: 4px;
+      transition: width .4s;
+    }
+    .risk-low    { background: var(--ok); }
+    .risk-medium { background: var(--accent); }
+    .risk-high   { background: var(--warn); }
+    .risk-crit   { background: var(--danger); }
+
+    /* ── Anomaly badge ─────────────────────────────────────────────────────── */
+    .anomaly-score {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 7px;
+      border-radius: 10px;
+      background: rgba(79,142,247,.15);
+      color: var(--accent);
+    }
+    .anomaly-score.anomaly-high {
+      background: rgba(232,69,69,.15);
+      color: var(--danger);
+    }
+
     /* ── Footer ────────────────────────────────────────────────────────────── */
     footer {
       text-align: center;
@@ -218,6 +252,14 @@
     </div>
   </div>
 
+  <!-- ── Top Risk Hosts ────────────────────────────────────────────────── -->
+  <div class="panel">
+    <div class="panel-header">Top Risk Hosts</div>
+    <div id="risk-container">
+      <div class="empty-msg">Loading…</div>
+    </div>
+  </div>
+
   <!-- ── Top Offending Hosts ───────────────────────────────────────────── -->
   <div class="panel">
     <div class="panel-header">Top Offending Hosts (open alerts)</div>
@@ -232,9 +274,11 @@
 <script>
 "use strict";
 
-const API_ALERTS = "/api/v1/alerts?limit=200";
-const API_HEALTH = "/api/v1/health";
-const REFRESH_MS = 30_000;
+const API_ALERTS  = "/api/v1/alerts?limit=200";
+const API_HEALTH  = "/api/v1/health";
+const API_RISK    = "/api/v1/risk?hostname=";
+const API_ANOMALY = "/api/v1/anomaly?hostname=";
+const REFRESH_MS  = 30_000;
 
 // ── Health probe ──────────────────────────────────────────────────────────────
 
@@ -286,8 +330,11 @@ async function loadAlerts() {
   // Alerts table
   renderAlertsTable(open);
 
-  // Top hosts
+  // Top hosts (by alert count)
   renderTopHosts(open);
+
+  // Top risk hosts (fetches /api/v1/risk per host)
+  renderTopRiskHosts([...hostSet]);
 
   // Last refresh time
   document.getElementById("last-refresh").textContent =
@@ -357,6 +404,74 @@ function renderTopHosts(open) {
   container.innerHTML = `
     <table>
       <thead><tr><th>Hostname</th><th>Open Alerts</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+// ── Top Risk Hosts ────────────────────────────────────────────────────────────
+
+async function renderTopRiskHosts(hosts) {
+  const container = document.getElementById("risk-container");
+  if (!hosts.length) {
+    container.innerHTML = '<div class="empty-msg">No data</div>';
+    return;
+  }
+
+  // Fetch risk + anomaly scores in parallel for up to 10 hosts
+  const top = hosts.slice(0, 10);
+  const results = await Promise.all(top.map(async host => {
+    let risk = 0;
+    let anomaly = 0;
+    try {
+      const [rr, ar] = await Promise.all([
+        fetch(API_RISK + encodeURIComponent(host)),
+        fetch(API_ANOMALY + encodeURIComponent(host)),
+      ]);
+      if (rr.ok) { const d = await rr.json(); risk = d.risk_score || 0; }
+      if (ar.ok) { const d = await ar.json(); anomaly = d.anomaly_score || 0; }
+    } catch (_) { /* best-effort */ }
+    return { host, risk, anomaly };
+  }));
+
+  // Sort by risk score descending
+  results.sort((a, b) => b.risk - a.risk);
+
+  const MAX_RISK = Math.max(...results.map(r => r.risk), 1);
+
+  const rows = results.map(({ host, risk, anomaly }) => {
+    const pct = Math.min(100, Math.round((risk / MAX_RISK) * 100));
+    let barClass = "risk-low";
+    if (risk >= 400) barClass = "risk-crit";
+    else if (risk >= 200) barClass = "risk-high";
+    else if (risk >= 80)  barClass = "risk-medium";
+
+    const anomalyHigh = anomaly > 2.0;
+    const anomalyLabel = anomaly > 0
+      ? `<span class="anomaly-score${anomalyHigh ? " anomaly-high" : ""}">σ ${anomaly.toFixed(2)}</span>`
+      : `<span class="anomaly-score">–</span>`;
+
+    return `
+      <tr>
+        <td>${escHtml(host)}</td>
+        <td>
+          <span class="risk-bar-wrap">
+            <span class="risk-bar ${barClass}" style="width:${pct}%"></span>
+          </span>
+          ${risk}
+        </td>
+        <td>${anomalyLabel}</td>
+      </tr>`;
+  }).join("");
+
+  container.innerHTML = `
+    <table>
+      <thead>
+        <tr>
+          <th>Hostname</th>
+          <th>Risk Score</th>
+          <th>Anomaly (σ)</th>
+        </tr>
+      </thead>
       <tbody>${rows}</tbody>
     </table>`;
 }

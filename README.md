@@ -17,12 +17,14 @@
   - [Elasticsearch Integration](#elasticsearch-integration)
   - [Audit Chain](#audit-chain)
   - [SOC Dashboard](#soc-dashboard)
+  - [Remote Log Anchoring](#remote-log-anchoring)
   - [Prometheus Metrics](#prometheus-metrics)
 - [Quick Start (Docker Compose)](#quick-start-docker-compose)
 - [Production Deployment](#production-deployment)
 - [Configuration Reference](#configuration-reference)
 - [REST API Reference](#rest-api-reference)
 - [Running Tests](#running-tests)
+- [CI / GitHub Actions](#ci--github-actions)
 - [Directory Structure](#directory-structure)
 
 ---
@@ -87,10 +89,13 @@ Located in `agent/`.
 |------|---------|
 | `agent/usb_monitor.py` | Real-time USB device monitoring via Linux udev (pyudev) or WMI on Windows |
 | `agent/bt_monitor.py` | Bluetooth device monitoring via `bluetoothctl` (Linux) or WMI (Windows) |
+| `agent/ebpf_monitor.py` | eBPF-based USB event monitor for Linux kernels with BPF support |
 | `agent/logger.py` | Local tamper-evident JSON-Lines audit log with SHA-256 hash chaining; optional AES-256-GCM encryption at rest |
 | `agent/crypto.py` | AES-256-GCM encrypt/decrypt helpers for the audit log |
 | `agent/retry_queue.py` | SQLite-backed persistent retry queue – events survive agent restarts and network outages |
 | `agent/transport.py` | Batched event transport over mTLS to the central server with disk-backed retry |
+| `agent/anchor_scheduler.py` | Periodic log-chain anchor submission to the server (HMAC-signed chain-head hash) |
+| `agent/integrity.py` | Agent self-integrity checker – hashes the running agent binary and registers/checks against the server |
 | `agent/logging_config.py` | Structured JSON logging setup |
 | `agent/config.py` | All settings via environment variables (Pydantic BaseSettings) |
 | `agent/main.py` | Entry point – starts all monitors and waits for SIGTERM/SIGINT |
@@ -117,10 +122,16 @@ Located in `server/`.
 
 | File | Purpose |
 |------|---------|
-| `server/app.py` | Flask REST API (ingest, alerts, timeline, audit, config, metrics, dashboard) |
+| `server/app.py` | Flask REST API (ingest, alerts, timeline, audit, config, metrics, dashboard, risk, anomaly, attack graph, anchoring, integrity) |
 | `server/database.py` | SQLAlchemy 2 persistence layer (SQLite default; PostgreSQL via `ITDN_DATABASE_URL`) |
-| `server/rules.py` | Anomaly detection rules engine |
+| `server/rules.py` | Anomaly detection rules engine (6 rules including Phase 4 additions) |
 | `server/alert_manager.py` | Alert deduplication, persistence, and forwarding |
+| `server/risk_scoring.py` | Per-host cumulative risk scoring based on alert severity weights |
+| `server/anomaly.py` | Statistical anomaly detector (z-score over rolling event windows) |
+| `server/baseline.py` | Device baseline helpers – track first-seen and last-seen per host/device pair |
+| `server/attack_graph.py` | Build and analyse lateral-movement attack graphs from event history |
+| `server/honeypot.py` | Honeypot device detection – compares device IDs against `ITDN_HONEYPOT_VIDS` |
+| `server/normalized_event.py` | Canonical event normalisation shared by rules and scoring |
 | `server/splunk_forwarder.py` | Splunk HTTP Event Collector (HEC) client |
 | `server/es_forwarder.py` | Elasticsearch Bulk API client (ELK alternative/complement) |
 | `server/auth.py` | Bearer-token API authentication + per-IP rate limiting |
@@ -129,7 +140,7 @@ Located in `server/`.
 | `server/metrics.py` | In-process Prometheus-format metrics counters |
 | `server/logging_config.py` | Structured JSON logging setup |
 | `server/config.py` | All settings via environment variables (Pydantic BaseSettings) |
-| `server/templates/dashboard.html` | SOC alert dashboard |
+| `server/templates/dashboard.html` | SOC alert dashboard with risk scores and anomaly indicators |
 
 ### Anomaly Detection Rules
 
@@ -139,6 +150,8 @@ Located in `server/`.
 | `unknown_device` | MEDIUM | Device ID never previously seen on this host |
 | `high_volume_transfer` | CRITICAL | Cumulative bytes transferred in last hour > 1 GB (configurable) |
 | `rapid_cycle` | HIGH | ≥ 5 connect/disconnect events within 5 minutes (tap-and-go exfil pattern) |
+| `cross_agent_device` | CRITICAL | Same device ID seen on a different host within the last hour (possible lateral movement) |
+| `honeypot_device` | CRITICAL | Device VID matches a configured honeypot VID – indicates device cloning or targeted attack |
 
 All thresholds are adjustable **at runtime** via `PATCH /api/v1/config` without
 redeploying the service, or at startup via environment variables.
@@ -185,12 +198,27 @@ ITDN_LOG_KEY=<hex-key> python -m tools.verify_chain --file /var/log/itdn/agent.l
 
 # Verify the server-side chain
 python -m tools.verify_chain --server https://siem.internal:8443 --hostname ws-042
+
+# Verify chain AND display remote log anchors
+python -m tools.verify_chain --server https://siem.internal:8443 --hostname ws-042 --anchors
 ```
 
 ### SOC Dashboard
 
-Available at `/dashboard` (also root `/`). Auto-refreshes every 30 seconds,
-shows open alerts with per-row ACK buttons.
+Available at `/dashboard` (also root `/`). Auto-refreshes every 30 seconds.
+Shows open alerts with per-row ACK buttons, per-host risk scores (colour-coded
+by severity), and an anomaly score indicator for each affected host.
+
+### Remote Log Anchoring
+
+The agent periodically submits an HMAC-SHA256-signed hash of its local audit
+chain head to the server (`POST /api/v1/anchor`). Stored anchors can be
+retrieved via `GET /api/v1/anchors?agent_id=<hostname>` and displayed by
+`tools/verify_chain.py --anchors`. This allows a SOC analyst to detect
+offline log tampering even if the agent was temporarily isolated.
+
+Set `ITDN_ANCHOR_INTERVAL` (default `300` s) to control how often anchors
+are submitted. The server signs anchors with `ITDN_API_KEY`.
 
 ### Prometheus Metrics
 
@@ -305,6 +333,7 @@ ansible-playbook deploy/ansible/deploy_agent.yml -i inventory.ini
 | `ITDN_MAX_QUEUE_SIZE` | `500` | Max events in retry queue before oldest is dropped |
 | `ITDN_POLL_INTERVAL` | `2.0` | USB poll interval (non-udev fallback) |
 | `ITDN_BT_ENABLED` | `true` | Enable Bluetooth monitoring |
+| `ITDN_ANCHOR_INTERVAL` | `300` | Seconds between remote log-chain anchor submissions |
 | `ITDN_LOG_LEVEL` | `INFO` | Log level |
 | `ITDN_LOG_JSON` | `true` | Emit structured JSON logs (`false` = plain text) |
 
@@ -316,7 +345,7 @@ ansible-playbook deploy/ansible/deploy_agent.yml -i inventory.ini
 | `ITDN_DATABASE_URL` | _(SQLite at DB_PATH)_ | Full SQLAlchemy URL; set for PostgreSQL |
 | `ITDN_SERVER_HOST` | `0.0.0.0` | Bind address |
 | `ITDN_SERVER_PORT` | `8443` | Bind port |
-| `ITDN_API_KEY` | _(empty)_ | Bearer token for `POST /api/v1/events`; empty = disabled |
+| `ITDN_API_KEY` | _(empty)_ | Bearer token for `POST /api/v1/events` and anchor signing; empty = disabled |
 | `ITDN_RATE_LIMIT_MAX` | `200` | Max requests per IP per window |
 | `ITDN_RATE_LIMIT_WINDOW_SECS` | `60` | Rate-limit window in seconds |
 | `SPLUNK_HEC_URL` | _(internal URL)_ | Splunk HEC endpoint |
@@ -332,6 +361,7 @@ ansible-playbook deploy/ansible/deploy_agent.yml -i inventory.ini
 | `ITDN_RAPID_CYCLE_COUNT` | `5` | Events within window to trigger rapid-cycle alert |
 | `ITDN_RAPID_CYCLE_WINDOW_SECS` | `300` | Rapid-cycle detection window (seconds) |
 | `ITDN_ALERT_DEDUP_SECS` | `3600` | Alert deduplication window (seconds) |
+| `ITDN_HONEYPOT_VIDS` | _(empty)_ | Comma-separated USB vendor IDs to treat as honeypot devices (e.g. `0781,058f`) |
 | `ITDN_LOG_LEVEL` | `INFO` | Log level |
 | `ITDN_LOG_JSON` | `true` | Emit structured JSON logs |
 
@@ -368,6 +398,53 @@ Current runtime anomaly-detection thresholds.
 
 Update thresholds at runtime. Body: `{"rapid_cycle_count": 3, ...}`.
 
+### `GET /api/v1/risk`
+
+Per-host cumulative risk score.
+Query params: `hostname` (required).
+Returns: `{"hostname": "...", "risk_score": <int>}`.
+
+### `GET /api/v1/baseline`
+
+Device baseline (first-seen / last-seen) for a host.
+Query params: `hostname` (required).
+Returns: `{"hostname": "...", "baseline": [...], "count": <int>}`.
+
+### `GET /api/v1/anomaly`
+
+Statistical anomaly score for a host based on events in the last hour.
+Query params: `hostname` (required).
+Returns: `{"hostname": "...", "anomaly_score": <float>, "event_count": <int>}`.
+
+### `GET /api/v1/attack_graph`
+
+Build and analyse a lateral-movement attack graph for a host.
+Query params: `hostname` (required).
+Returns: `{"hostname": "...", "graph": {...}, "findings": [...]}`.
+
+### `POST /api/v1/anchor`
+
+Submit a signed audit-chain anchor from an agent. Requires `Authorization: Bearer \<ITDN_API_KEY\>`.
+Body: `{"agent_id": "ws-042", "chain_head_hash": "<sha256>"}`.
+Returns: `{"ok": true, "signature": "...", "anchored_at": "..."}`.
+
+### `GET /api/v1/anchors`
+
+List stored log anchors for an agent.
+Query params: `agent_id` (required), `limit`.
+Returns: `{"anchors": [...], "count": <int>}`.
+
+### `POST /api/v1/integrity/register`
+
+Register a trusted hash for an agent binary. Requires `Authorization: Bearer \<ITDN_API_KEY\>`.
+Body: `{"agent_id": "ws-042", "agent_hash": "<sha256>"}`.
+
+### `POST /api/v1/integrity/check`
+
+Verify an agent binary hash against the registered trusted hash. Requires `Authorization: Bearer \<ITDN_API_KEY\>`.
+Body: `{"agent_id": "ws-042", "agent_hash": "<sha256>"}`.
+Returns: `{"trusted": true|false, "stored_hash": "..."}`.
+
 ### `GET /metrics`
 
 Prometheus-format metrics.
@@ -391,6 +468,19 @@ python -m pytest tests/ -v
 
 ---
 
+## CI / GitHub Actions
+
+The repository ships a fully configured CI pipeline at
+`.github/workflows/ci.yml` that runs on every push and pull request:
+
+| Job | What it does |
+|-----|-------------|
+| `test` | Installs `requirements.txt`, runs `pytest` with line-level coverage on Python 3.11 and 3.12, and uploads `coverage.xml` as a build artefact |
+| `docker-build` | Builds both `Dockerfile.server` and `Dockerfile.agent` to catch image regressions |
+| `codeql` | GitHub CodeQL static analysis (Python, `security-and-quality` query suite) |
+
+---
+
 ## Directory Structure
 
 ```
@@ -404,18 +494,27 @@ python -m pytest tests/ -v
 │   ├── transport.py            # mTLS event transport with disk-backed retry
 │   ├── usb_monitor.py          # USB event monitor
 │   ├── bt_monitor.py           # Bluetooth event monitor
+│   ├── ebpf_monitor.py         # eBPF-based USB event monitor (Linux)
+│   ├── anchor_scheduler.py     # Periodic chain-head anchor submission
+│   ├── integrity.py            # Agent self-integrity checker
 │   └── main.py                 # Agent entry point
 │
 ├── server/                     # Central SIEM server
 │   ├── config.py               # Pydantic BaseSettings configuration
 │   ├── logging_config.py       # Structured JSON logging
 │   ├── database.py             # SQLAlchemy 2 (SQLite / PostgreSQL)
-│   ├── rules.py                # Anomaly detection rules engine
+│   ├── rules.py                # Anomaly detection rules engine (6 rules)
 │   ├── rule_config.py          # Runtime-adjustable thresholds
 │   ├── alert_manager.py        # Alert dedup and forwarding
 │   ├── schema.py               # Pydantic v2 input validation
 │   ├── auth.py                 # API key auth + rate limiting
 │   ├── metrics.py              # Prometheus-format metrics
+│   ├── risk_scoring.py         # Per-host cumulative risk scoring
+│   ├── anomaly.py              # Statistical anomaly detector
+│   ├── baseline.py             # Device baseline tracking
+│   ├── attack_graph.py         # Lateral-movement attack graph builder
+│   ├── honeypot.py             # Honeypot device detection
+│   ├── normalized_event.py     # Canonical event normalisation
 │   ├── splunk_forwarder.py     # Splunk HEC client
 │   ├── es_forwarder.py         # Elasticsearch client
 │   ├── app.py                  # Flask REST API
@@ -433,15 +532,28 @@ python -m pytest tests/ -v
 │   ├── test_rule_config.py
 │   ├── test_ack_endpoint.py
 │   ├── test_verify_chain.py
+│   ├── test_risk_scoring.py
+│   ├── test_anomaly.py
+│   ├── test_baseline.py
+│   ├── test_attack_graph.py
+│   ├── test_honeypot.py
+│   ├── test_cross_agent.py
+│   ├── test_anchoring.py
+│   ├── test_integrity.py
+│   ├── test_normalized_event.py
 │   └── test_integration.py     # Full-stack integration (real SQLite)
 │
 ├── tools/
-│   └── verify_chain.py         # Audit chain integrity verifier CLI
+│   └── verify_chain.py         # Audit chain integrity verifier CLI (--anchors flag)
 │
 ├── deploy/
 │   ├── gen_certs.sh            # CA + server + agent cert provisioning
 │   ├── ansible/                # Ansible deployment playbook
 │   └── splunk_config/          # Splunk index + saved-search configs
+│
+├── .github/
+│   └── workflows/
+│       └── ci.yml              # CI: test (pytest + coverage), docker-build, CodeQL
 │
 ├── Dockerfile.agent            # Agent container (non-root user)
 ├── Dockerfile.server           # Server container (non-root user)
