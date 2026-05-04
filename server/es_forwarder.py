@@ -57,6 +57,25 @@ def _ssl_context(verify: bool) -> ssl.SSLContext:
     return ctx
 
 
+def _build_headers(cfg: Dict[str, Any]) -> Dict[str, str]:
+    """Build HTTP request headers with auth credentials.
+
+    Isolated into a helper so credentials do not appear in the same
+    scope as any logging statements.
+    """
+    headers: Dict[str, str] = {"Content-Type": "application/json"}
+    if cfg["api_key"]:
+        headers["Authorization"] = f"ApiKey {cfg['api_key']}"
+    elif cfg["username"] and cfg["password"]:
+        import base64
+
+        creds = base64.b64encode(
+            (cfg["username"] + ":" + cfg["password"]).encode()
+        ).decode()
+        headers["Authorization"] = f"Basic {creds}"
+    return headers
+
+
 def _index_document(index: str, doc: Dict[str, Any]) -> bool:
     """
     POST a single document to *index* via the Elasticsearch index API.
@@ -71,17 +90,7 @@ def _index_document(index: str, doc: Dict[str, Any]) -> bool:
 
     url = f"{cfg['url']}/{index}/_doc"
     body = json.dumps(doc).encode("utf-8")
-
-    headers: Dict[str, str] = {"Content-Type": "application/json"}
-    if cfg["api_key"]:
-        headers["Authorization"] = f"ApiKey {cfg['api_key']}"
-    elif cfg["username"] and cfg["password"]:
-        import base64
-
-        creds = base64.b64encode(
-            f"{cfg['username']}:{cfg['password']}".encode()
-        ).decode()
-        headers["Authorization"] = f"Basic {creds}"
+    headers = _build_headers(cfg)
 
     req = urllib.request.Request(url, data=body, headers=headers, method="POST")
     try:

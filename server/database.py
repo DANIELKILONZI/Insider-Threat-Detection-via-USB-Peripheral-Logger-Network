@@ -363,31 +363,31 @@ def get_timeline(
                 this timestamp (optional).
     limit:      Maximum total rows returned (default 500).
     """
-    conditions_e: list[str] = []
-    conditions_a: list[str] = []
+    event_conditions: list[str] = []
+    alert_conditions: list[str] = []
     params_e: Dict[str, Any] = {}
     params_a: Dict[str, Any] = {}
 
     if hostname:
-        conditions_e.append("hostname = :hostname")
-        conditions_a.append("hostname = :hostname")
+        event_conditions.append("hostname = :hostname")
+        alert_conditions.append("hostname = :hostname")
         params_e["hostname"] = hostname
         params_a["hostname"] = hostname
 
     if device_id:
-        conditions_e.append("device_id = :device_id")
-        conditions_a.append("device_id = :device_id")
+        event_conditions.append("device_id = :device_id")
+        alert_conditions.append("device_id = :device_id")
         params_e["device_id"] = device_id
         params_a["device_id"] = device_id
 
     if since:
-        conditions_e.append("received_at >= :since")
-        conditions_a.append("created_at >= :since")
+        event_conditions.append("received_at >= :since")
+        alert_conditions.append("created_at >= :since")
         params_e["since"] = since
         params_a["since"] = since
 
-    where_e = ("WHERE " + " AND ".join(conditions_e)) if conditions_e else ""
-    where_a = ("WHERE " + " AND ".join(conditions_a)) if conditions_a else ""
+    where_e = ("WHERE " + " AND ".join(event_conditions)) if event_conditions else ""
+    where_a = ("WHERE " + " AND ".join(alert_conditions)) if alert_conditions else ""
 
     params_e["limit"] = limit
     params_a["limit"] = limit

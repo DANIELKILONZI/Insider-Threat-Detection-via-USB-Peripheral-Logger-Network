@@ -11,6 +11,7 @@ Import the module-level constants directly::
     from agent.config import SERVER_URL, HOSTNAME, FLUSH_INTERVAL
 """
 
+import os as _os
 import socket
 
 from pydantic import Field
@@ -50,8 +51,6 @@ class _AgentSettings(BaseSettings):
     # local audit log.  Leave empty to store plaintext (default / dev mode).
     ITDN_LOG_KEY: str = Field(default="")
 
-
-import os as _os
 
 _s = _AgentSettings()
 

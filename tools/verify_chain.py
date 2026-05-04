@@ -32,7 +32,7 @@ import json
 import ssl
 import sys
 import urllib.request
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 _GENESIS_HASH = "0" * 64
 
@@ -116,7 +116,7 @@ def _load_from_file(path: str) -> List[Dict[str, Any]]:
     return records
 
 
-def _load_from_server(server_url: str, hostname: str, ca_cert: str | None, limit: int) -> List[Dict[str, Any]]:
+def _load_from_server(server_url: str, hostname: str, ca_cert: Optional[str], limit: int) -> List[Dict[str, Any]]:
     """Fetch the audit chain from the server REST API."""
     url = f"{server_url.rstrip('/')}/api/v1/audit?hostname={hostname}&limit={limit}"
     ctx = ssl.create_default_context()
