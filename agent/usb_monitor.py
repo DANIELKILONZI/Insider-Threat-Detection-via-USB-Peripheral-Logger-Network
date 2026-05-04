@@ -243,6 +243,9 @@ def _enumerate_and_dispatch_wmi(c: Any, event_type: str, callback: EventCallback
             callback(evt)
     except Exception:  # pylint: disable=broad-except
         logger.exception("WMI device enumeration failed")
+
+
+def _list_windows_usb_devices() -> Dict[str, EventDict]:
     """Return a snapshot using WMI (Windows only)."""
     devices: Dict[str, EventDict] = {}
     try:

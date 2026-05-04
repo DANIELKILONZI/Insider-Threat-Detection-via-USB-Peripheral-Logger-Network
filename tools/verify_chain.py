@@ -159,8 +159,8 @@ def _build_parser() -> argparse.ArgumentParser:
         help="CA certificate file to verify the server TLS certificate.",
     )
     parser.add_argument(
-        "--limit", metavar="N", type=int, default=100_000,
-        help="Maximum number of records to fetch from the server (default: 100000).",
+        "--limit", metavar="N", type=int, default=10_000,
+        help="Maximum number of records to fetch from the server (default: 10000).",
     )
     return parser
 

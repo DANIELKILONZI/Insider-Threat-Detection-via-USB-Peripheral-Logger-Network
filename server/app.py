@@ -89,7 +89,8 @@ def ingest_events():
                 return jsonify({"error": "Validation failed", "details": exc.errors()}), 400
         except ImportError:
             pass
-        return jsonify({"error": f"Validation failed: {exc}"}), 400
+        logger.debug("Event batch validation failed: %s", exc)
+        return jsonify({"error": "Validation failed"}), 400
 
     stored = 0
     for event in events:

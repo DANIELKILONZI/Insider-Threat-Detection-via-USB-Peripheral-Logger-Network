@@ -315,7 +315,7 @@ function renderAlertsTable(open) {
       <td>${escHtml(a.device_id)}</td>
       <td>${escHtml(a.rule_name)}</td>
       <td><span class="badge badge-${a.severity}">${a.severity}</span></td>
-      <td title="${escHtml(a.description)}">${escHtml(a.description.slice(0, 80))}…</td>
+      <td title="${escHtml(a.description)}">${escHtml(a.description.length > 80 ? a.description.slice(0, 80) + '…' : a.description)}</td>
       <td>
         <button class="ack-btn" onclick="ackAlert(${a.id})">Ack</button>
       </td>
