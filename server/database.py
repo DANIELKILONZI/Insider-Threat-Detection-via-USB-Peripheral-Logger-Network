@@ -60,6 +60,18 @@ def _get_engine() -> sa.Engine:
         if DATABASE_URL.startswith("sqlite"):
             kwargs["connect_args"] = {"check_same_thread": False}
             kwargs["poolclass"] = sa.pool.StaticPool
+        else:
+            # PostgreSQL: explicit connection pooling for multi-agent deployments.
+            # pool_size: persistent connections kept open between requests.
+            # max_overflow: extra connections allowed above pool_size under load.
+            # pool_pre_ping: verify a connection is alive before using it (handles
+            #   server-side idle timeouts).
+            # pool_recycle: return connections to the pool after 1 h to avoid
+            #   stale-connection errors from PostgreSQL's tcp_keepalives.
+            kwargs["pool_size"] = 10
+            kwargs["max_overflow"] = 20
+            kwargs["pool_pre_ping"] = True
+            kwargs["pool_recycle"] = 3600
         _engine = sa.create_engine(DATABASE_URL, **kwargs)
     return _engine
 
