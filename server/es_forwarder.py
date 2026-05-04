@@ -74,26 +74,49 @@ def _build_headers(username: str, password: str, api_key: str) -> Dict[str, str]
     return headers
 
 
-def _index_document(url: str, index: str, doc: Dict[str, Any], verify_tls: bool, headers: Dict[str, str]) -> bool:
+def _send_request(
+    endpoint: str,
+    body: bytes,
+    headers: Dict[str, str],
+    index: str,
+    verify_tls: bool,
+) -> bool:
     """
-    POST a single document to *index* via the Elasticsearch index API.
+    Execute an HTTP POST and log only non-sensitive outcome details.
 
-    Returns True on success.  Silently returns False (and logs a warning)
-    when ES is not configured or the request fails.
+    Logs only the HTTP status code or error category – never the exception
+    message – to avoid inadvertently leaking request headers through
+    exception repr.
     """
-    endpoint = f"{url}/{index}/_doc"
-    body = json.dumps(doc).encode("utf-8")
+    import urllib.error
+
     req = urllib.request.Request(endpoint, data=body, headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(
-            req, context=_ssl_context(verify_tls), timeout=10
-        ) as resp:
+        with urllib.request.urlopen(req, context=_ssl_context(verify_tls), timeout=10) as resp:
             if resp.status in (200, 201):
                 return True
-            logger.warning("Elasticsearch returned HTTP %d for index %s", resp.status, index)
-    except Exception as exc:  # pylint: disable=broad-except
-        logger.warning("Elasticsearch forwarding failed for index %s: %s", index, exc)
+    except urllib.error.HTTPError as exc:
+        http_status = exc.code
+        logger.warning("Elasticsearch returned HTTP %d for index %s", http_status, index)
+        return False
+    except Exception:  # pylint: disable=broad-except
+        logger.warning("Elasticsearch connection failed for index %s", index)
+        return False
+    logger.warning("Elasticsearch returned unexpected status for index %s", index)
     return False
+
+
+def _index_document(
+    url: str,
+    index: str,
+    doc: Dict[str, Any],
+    verify_tls: bool,
+    headers: Dict[str, str],
+) -> bool:
+    """POST a single document to *index* via the Elasticsearch index API."""
+    endpoint = f"{url}/{index}/_doc"
+    body = json.dumps(doc).encode("utf-8")
+    return _send_request(endpoint, body, headers, index, verify_tls)
 
 
 def _forward(index: str, doc: Dict[str, Any]) -> bool:
