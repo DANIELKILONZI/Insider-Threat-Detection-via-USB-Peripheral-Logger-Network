@@ -57,45 +57,36 @@ def _ssl_context(verify: bool) -> ssl.SSLContext:
     return ctx
 
 
-def _build_headers(cfg: Dict[str, Any]) -> Dict[str, str]:
+def _build_headers(username: str, password: str, api_key: str) -> Dict[str, str]:
     """Build HTTP request headers with auth credentials.
 
-    Isolated into a helper so credentials do not appear in the same
-    scope as any logging statements.
+    Accepts individual credential strings so the dict containing the
+    password never enters the scope of any logging statement.
     """
     headers: Dict[str, str] = {"Content-Type": "application/json"}
-    if cfg["api_key"]:
-        headers["Authorization"] = f"ApiKey {cfg['api_key']}"
-    elif cfg["username"] and cfg["password"]:
+    if api_key:
+        headers["Authorization"] = f"ApiKey {api_key}"
+    elif username and password:
         import base64
 
-        creds = base64.b64encode(
-            (cfg["username"] + ":" + cfg["password"]).encode()
-        ).decode()
+        creds = base64.b64encode((username + ":" + password).encode()).decode()
         headers["Authorization"] = f"Basic {creds}"
     return headers
 
 
-def _index_document(index: str, doc: Dict[str, Any]) -> bool:
+def _index_document(url: str, index: str, doc: Dict[str, Any], verify_tls: bool, headers: Dict[str, str]) -> bool:
     """
     POST a single document to *index* via the Elasticsearch index API.
 
     Returns True on success.  Silently returns False (and logs a warning)
     when ES is not configured or the request fails.
     """
-    cfg = _get_config()
-    if not cfg["url"]:
-        logger.debug("Elasticsearch URL not configured – skipping forwarding")
-        return False
-
-    url = f"{cfg['url']}/{index}/_doc"
+    endpoint = f"{url}/{index}/_doc"
     body = json.dumps(doc).encode("utf-8")
-    headers = _build_headers(cfg)
-
-    req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+    req = urllib.request.Request(endpoint, data=body, headers=headers, method="POST")
     try:
         with urllib.request.urlopen(
-            req, context=_ssl_context(cfg["verify_tls"]), timeout=10
+            req, context=_ssl_context(verify_tls), timeout=10
         ) as resp:
             if resp.status in (200, 201):
                 return True
@@ -105,13 +96,23 @@ def _index_document(index: str, doc: Dict[str, Any]) -> bool:
     return False
 
 
+def _forward(index: str, doc: Dict[str, Any]) -> bool:
+    """Forward *doc* to the given ES *index*; returns True on success."""
+    cfg = _get_config()
+    if not cfg["url"]:
+        logger.debug("Elasticsearch URL not configured – skipping forwarding")
+        return False
+    headers = _build_headers(cfg["username"], cfg["password"], cfg["api_key"])
+    return _index_document(cfg["url"], index, doc, cfg["verify_tls"], headers)
+
+
 def forward_event(event: Dict[str, Any]) -> bool:
     """Index a raw device event into the events index."""
     cfg = _get_config()
-    return _index_document(cfg["events_index"], event)
+    return _forward(cfg["events_index"], event)
 
 
 def forward_alert(alert: Dict[str, Any]) -> bool:
     """Index a fired alert into the alerts index."""
     cfg = _get_config()
-    return _index_document(cfg["alerts_index"], alert)
+    return _forward(cfg["alerts_index"], alert)
