@@ -1,9 +1,15 @@
 # ── Server dependencies ───────────────────────────────────────────────────────
 flask>=3.0,<4.0
+sqlalchemy>=2.0,<3.0
+pydantic>=2.0,<3.0
 
 # ── Agent optional dependencies (install on Linux endpoints) ──────────────────
 # pyudev>=0.24        # Linux udev USB events (highly recommended on Linux)
 # wmi>=1.5.1          # Windows USB/Bluetooth enumeration (Windows only)
+# pythoncom>=302      # Windows COM initialisation for WMI event monitor
+
+# ── PostgreSQL backend (optional) ─────────────────────────────────────────────
+# psycopg2-binary>=2.9  # install only when ITDN_DATABASE_URL points to PostgreSQL
 
 # ── Testing ───────────────────────────────────────────────────────────────────
 pytest>=8.0

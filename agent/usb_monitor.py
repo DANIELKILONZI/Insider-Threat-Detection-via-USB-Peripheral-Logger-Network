@@ -28,7 +28,7 @@ import platform
 import re
 import threading
 import time
-from typing import Callable, Dict, Generator, Optional
+from typing import Any, Callable, Dict, Optional
 
 from agent.config import HOSTNAME, POLL_INTERVAL
 
@@ -167,7 +167,82 @@ def _list_linux_usb_devices() -> Dict[str, EventDict]:
     return devices
 
 
-def _list_windows_usb_devices() -> Dict[str, EventDict]:
+def _wmi_event_monitor_loop(callback: EventCallback, stop_event: threading.Event) -> None:
+    """
+    Real-time USB event monitoring on Windows using WMI async queries.
+
+    Subscribes to Win32_DeviceChangeEvent and Win32_USBControllerDevice
+    change notifications via WMI SWbemSink so that plug/unplug events are
+    delivered with zero polling latency.
+
+    Falls back to the poll-based monitor if WMI or pythoncom is unavailable.
+    """
+    try:
+        import pythoncom  # noqa: PLC0415
+        import wmi        # noqa: PLC0415
+    except ImportError:
+        logger.warning(
+            "pythoncom/wmi not available; falling back to poll-based monitor"
+        )
+        _poll_monitor_loop(callback, stop_event)
+        return
+
+    # WMI event queries must run in a COM-initialised thread.
+    pythoncom.CoInitialize()
+    try:
+        c = wmi.WMI()
+
+        # Subscribe to device arrival / removal events (ConfigManagerErrorCode change)
+        watcher_add = c.Win32_DeviceChangeEvent.watch_for(notification_type="Creation")
+        watcher_remove = c.Win32_DeviceChangeEvent.watch_for(notification_type="Deletion")
+
+        logger.info("USB monitor started (WMI event mode)")
+
+        while not stop_event.is_set():
+            # Check arrivals (100 ms timeout keeps the stop check responsive)
+            try:
+                watcher_add(timeout_ms=100)
+                _enumerate_and_dispatch_wmi(c, "connected", callback)
+            except wmi.x_wmi_timed_out:
+                pass
+            except Exception:  # pylint: disable=broad-except
+                logger.exception("WMI arrival watch error")
+
+            if stop_event.is_set():
+                break
+
+            try:
+                watcher_remove(timeout_ms=100)
+                _enumerate_and_dispatch_wmi(c, "disconnected", callback)
+            except wmi.x_wmi_timed_out:
+                pass
+            except Exception:  # pylint: disable=broad-except
+                logger.exception("WMI removal watch error")
+
+    finally:
+        pythoncom.CoUninitialize()
+
+
+def _enumerate_and_dispatch_wmi(c: Any, event_type: str, callback: EventCallback) -> None:  # type: ignore[type-arg]
+    """Snapshot current WMI USB devices and call *callback* for each."""
+    try:
+        import wmi  # noqa: PLC0415
+
+        for disk in c.Win32_DiskDrive():
+            if "USB" not in (disk.InterfaceType or ""):
+                continue
+            device_id = disk.PNPDeviceID or disk.DeviceID or "unknown"
+            evt = _build_event(
+                event_type,
+                device_id,
+                disk.SerialNumber or "",
+                disk.Manufacturer or "",
+                disk.Model or "",
+                disk.DeviceID or "",
+            )
+            callback(evt)
+    except Exception:  # pylint: disable=broad-except
+        logger.exception("WMI device enumeration failed")
     """Return a snapshot using WMI (Windows only)."""
     devices: Dict[str, EventDict] = {}
     try:
@@ -254,6 +329,8 @@ class USBMonitor:
         system = platform.system()
         if system == "Linux":
             target = _udev_monitor_loop
+        elif system == "Windows":
+            target = _wmi_event_monitor_loop
         else:
             target = _poll_monitor_loop
         self._thread = threading.Thread(

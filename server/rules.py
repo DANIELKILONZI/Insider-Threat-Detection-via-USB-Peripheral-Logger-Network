@@ -24,13 +24,7 @@ import datetime
 import logging
 from typing import Any, Dict, List, NamedTuple, Optional
 
-from server.config import (
-    AFTER_HOURS_END,
-    AFTER_HOURS_START,
-    RAPID_CYCLE_COUNT,
-    RAPID_CYCLE_WINDOW_SECS,
-    VOLUME_THRESHOLD_BYTES,
-)
+from server.rule_config import get_config
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +46,10 @@ def rule_after_hours_device(event: EventDict, db: Any) -> Optional[Alert]:
     if event.get("event_type") != "connected":
         return None
 
+    cfg = get_config()
+    after_hours_start: int = cfg["after_hours_start"]
+    after_hours_end: int = cfg["after_hours_end"]
+
     # Parse the event timestamp; fall back to current UTC time
     ts_str = event.get("timestamp", "")
     try:
@@ -60,15 +58,15 @@ def rule_after_hours_device(event: EventDict, db: Any) -> Optional[Alert]:
         ts = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
 
     hour = ts.hour
-    # After-hours is AFTER_HOURS_START .. midnight .. AFTER_HOURS_END
-    if AFTER_HOURS_START <= hour or hour < AFTER_HOURS_END:
+    # After-hours is after_hours_start .. midnight .. after_hours_end
+    if after_hours_start <= hour or hour < after_hours_end:
         return Alert(
             rule_name="after_hours_device",
             severity="HIGH",
             description=(
                 f"Device {event.get('device_id')} connected at {ts_str} "
                 f"on host {event.get('hostname')} – outside business hours "
-                f"({AFTER_HOURS_START:02d}:00–{AFTER_HOURS_END:02d}:00)."
+                f"({after_hours_start:02d}:00–{after_hours_end:02d}:00)."
             ),
         )
     return None
@@ -97,7 +95,7 @@ def rule_unknown_device(event: EventDict, db: Any) -> Optional[Alert]:
 def rule_high_volume_transfer(event: EventDict, db: Any) -> Optional[Alert]:
     """
     Fire when the cumulative transfer_bytes for a host in the last hour
-    exceeds VOLUME_THRESHOLD_BYTES.
+    exceeds the configured volume threshold.
     """
     if int(event.get("transfer_bytes", 0)) == 0:
         return None
@@ -107,7 +105,8 @@ def rule_high_volume_transfer(event: EventDict, db: Any) -> Optional[Alert]:
     total_bytes = sum(int(r["transfer_bytes"]) for r in rows)
     total_bytes += int(event.get("transfer_bytes", 0))
 
-    if total_bytes >= VOLUME_THRESHOLD_BYTES:
+    volume_threshold = get_config()["volume_threshold_bytes"]
+    if total_bytes >= volume_threshold:
         gb = total_bytes / (1024 ** 3)
         return Alert(
             rule_name="high_volume_transfer",
@@ -115,7 +114,7 @@ def rule_high_volume_transfer(event: EventDict, db: Any) -> Optional[Alert]:
             description=(
                 f"Host {hostname} transferred {gb:.2f} GB via USB/BT "
                 f"in the last hour (threshold: "
-                f"{VOLUME_THRESHOLD_BYTES/(1024**3):.0f} GB)."
+                f"{volume_threshold/(1024**3):.0f} GB)."
             ),
         )
     return None
@@ -123,26 +122,30 @@ def rule_high_volume_transfer(event: EventDict, db: Any) -> Optional[Alert]:
 
 def rule_rapid_cycle(event: EventDict, db: Any) -> Optional[Alert]:
     """
-    Fire when a host generates ≥ RAPID_CYCLE_COUNT USB events within
-    RAPID_CYCLE_WINDOW_SECS (indicates rapid plug/unplug – common during
+    Fire when a host generates ≥ rapid_cycle_count USB events within
+    rapid_cycle_window_secs (indicates rapid plug/unplug – common during
     data exfiltration across multiple devices).
     """
+    cfg = get_config()
+    rapid_cycle_count: int = cfg["rapid_cycle_count"]
+    rapid_cycle_window: int = cfg["rapid_cycle_window_secs"]
+
     hostname = event.get("hostname", "")
-    rows = db.get_recent_events(hostname, window_secs=RAPID_CYCLE_WINDOW_SECS)
+    rows = db.get_recent_events(hostname, window_secs=rapid_cycle_window)
     # Count only connect/disconnect events for the same device family
     cycle_events = [
         r for r in rows if r["event_type"] in ("connected", "disconnected")
     ]
     count = len(cycle_events) + 1  # +1 for the current event
 
-    if count >= RAPID_CYCLE_COUNT:
+    if count >= rapid_cycle_count:
         return Alert(
             rule_name="rapid_cycle",
             severity="HIGH",
             description=(
                 f"Host {hostname} had {count} connect/disconnect events "
-                f"within {RAPID_CYCLE_WINDOW_SECS}s "
-                f"(threshold: {RAPID_CYCLE_COUNT}). "
+                f"within {rapid_cycle_window}s "
+                f"(threshold: {rapid_cycle_count}). "
                 f"Possible rapid-cycle exfiltration."
             ),
         )

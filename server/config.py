@@ -18,6 +18,9 @@ CA_CERT: str = os.environ.get("ITDN_CA_CERT", "/etc/itdn/ca.crt")
 
 # ── Persistence ───────────────────────────────────────────────────────────────
 DB_PATH: str = os.environ.get("ITDN_DB_PATH", "/var/lib/itdn/itdn.db")
+# Full SQLAlchemy database URL.  Defaults to the SQLite path above.
+# For PostgreSQL: postgresql+psycopg2://user:password@host:5432/itdn
+DATABASE_URL: str = os.environ.get("ITDN_DATABASE_URL", f"sqlite:///{DB_PATH}")
 
 # ── Splunk HEC ────────────────────────────────────────────────────────────────
 SPLUNK_HEC_URL: str = os.environ.get(
@@ -46,3 +49,12 @@ RAPID_CYCLE_WINDOW_SECS: int = int(os.environ.get("ITDN_RAPID_CYCLE_WINDOW_SECS"
 # Seconds within which duplicate alerts for the same host+device+rule are
 # suppressed to avoid alert storms.
 ALERT_DEDUP_WINDOW_SECS: int = int(os.environ.get("ITDN_ALERT_DEDUP_SECS", "3600"))
+
+# ── API security ──────────────────────────────────────────────────────────────
+# Shared secret for Bearer-token authentication on POST /api/v1/events.
+# Leave empty to disable auth (dev / test mode).
+API_SECRET_KEY: str = os.environ.get("ITDN_API_KEY", "")
+
+# ── Rate limiting ─────────────────────────────────────────────────────────────
+RATE_LIMIT_MAX: int = int(os.environ.get("ITDN_RATE_LIMIT_MAX", "200"))
+RATE_LIMIT_WINDOW_SECS: int = int(os.environ.get("ITDN_RATE_LIMIT_WINDOW_SECS", "60"))

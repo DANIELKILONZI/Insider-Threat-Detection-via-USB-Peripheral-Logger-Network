@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ITDN – Insider Threat Detection Dashboard</title>
+  <style>
+    /* ── Reset & base ──────────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:      #0f1117;
+      --surface: #1a1d27;
+      --border:  #2c2f3e;
+      --accent:  #4f8ef7;
+      --danger:  #e84545;
+      --warn:    #f5a623;
+      --ok:      #3ac47d;
+      --text:    #d0d4e8;
+      --muted:   #737995;
+      --radius:  8px;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+      min-height: 100vh;
+    }
+
+    /* ── Layout ────────────────────────────────────────────────────────────── */
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 14px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    header h1 { font-size: 18px; font-weight: 600; letter-spacing: .5px; }
+    header h1 span { color: var(--accent); }
+
+    #status-dot {
+      width: 10px; height: 10px; border-radius: 50%;
+      background: var(--muted); display: inline-block; margin-right: 6px;
+      transition: background .3s;
+    }
+    #status-dot.ok  { background: var(--ok); }
+    #status-dot.err { background: var(--danger); }
+
+    main { padding: 24px; max-width: 1280px; margin: 0 auto; }
+
+    /* ── Stat cards ────────────────────────────────────────────────────────── */
+    .stat-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: 16px;
+      margin-bottom: 28px;
+    }
+
+    .stat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 18px 20px;
+    }
+
+    .stat-card .label { font-size: 11px; text-transform: uppercase;
+                        letter-spacing: .8px; color: var(--muted); margin-bottom: 8px; }
+    .stat-card .value { font-size: 28px; font-weight: 700; }
+    .stat-card .value.danger  { color: var(--danger); }
+    .stat-card .value.warn    { color: var(--warn); }
+    .stat-card .value.ok      { color: var(--ok); }
+    .stat-card .value.neutral { color: var(--text); }
+
+    /* ── Tables ────────────────────────────────────────────────────────────── */
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      margin-bottom: 28px;
+      overflow: hidden;
+    }
+
+    .panel-header {
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--border);
+      font-weight: 600;
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .panel-header .refresh-btn {
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      padding: 4px 10px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+      transition: color .2s, border-color .2s;
+    }
+    .panel-header .refresh-btn:hover { color: var(--accent); border-color: var(--accent); }
+
+    table { width: 100%; border-collapse: collapse; }
+    th {
+      padding: 10px 16px;
+      text-align: left;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .6px;
+      color: var(--muted);
+      background: rgba(255,255,255,.02);
+      border-bottom: 1px solid var(--border);
+    }
+    td {
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: middle;
+      max-width: 320px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: rgba(255,255,255,.03); }
+
+    /* ── Severity badges ───────────────────────────────────────────────────── */
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .5px;
+    }
+    .badge-CRITICAL { background: rgba(232,69,69,.18); color: var(--danger); }
+    .badge-HIGH     { background: rgba(245,166,35,.18); color: var(--warn); }
+    .badge-MEDIUM   { background: rgba(79,142,247,.18); color: var(--accent); }
+    .badge-LOW      { background: rgba(58,196,125,.18); color: var(--ok); }
+
+    /* ── Ack button ────────────────────────────────────────────────────────── */
+    .ack-btn {
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      padding: 3px 10px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 11px;
+      transition: color .2s, border-color .2s;
+    }
+    .ack-btn:hover { color: var(--ok); border-color: var(--ok); }
+
+    /* ── Footer ────────────────────────────────────────────────────────────── */
+    footer {
+      text-align: center;
+      color: var(--muted);
+      font-size: 11px;
+      padding: 20px;
+    }
+
+    /* ── Utility ───────────────────────────────────────────────────────────── */
+    .empty-msg { padding: 24px; text-align: center; color: var(--muted); }
+    #last-refresh { font-size: 11px; color: var(--muted); }
+  </style>
+</head>
+<body>
+<header>
+  <h1>ITDN &mdash; <span>Insider Threat Detection</span></h1>
+  <div>
+    <span id="status-dot"></span>
+    <span id="server-status">Connecting…</span>
+    &nbsp;&nbsp;
+    <span id="last-refresh"></span>
+  </div>
+</header>
+
+<main>
+  <!-- ── Stat row ──────────────────────────────────────────────────────── -->
+  <div class="stat-grid">
+    <div class="stat-card">
+      <div class="label">Open Alerts</div>
+      <div class="value danger" id="stat-open">–</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Critical</div>
+      <div class="value danger" id="stat-critical">–</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">High</div>
+      <div class="value warn" id="stat-high">–</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Acknowledged</div>
+      <div class="value ok" id="stat-acked">–</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Affected Hosts</div>
+      <div class="value neutral" id="stat-hosts">–</div>
+    </div>
+  </div>
+
+  <!-- ── Open Alerts ───────────────────────────────────────────────────── -->
+  <div class="panel">
+    <div class="panel-header">
+      Open Alerts
+      <button class="refresh-btn" onclick="loadAlerts()">↻ Refresh</button>
+    </div>
+    <div id="alerts-container">
+      <div class="empty-msg">Loading…</div>
+    </div>
+  </div>
+
+  <!-- ── Top Offending Hosts ───────────────────────────────────────────── -->
+  <div class="panel">
+    <div class="panel-header">Top Offending Hosts (open alerts)</div>
+    <div id="hosts-container">
+      <div class="empty-msg">Loading…</div>
+    </div>
+  </div>
+</main>
+
+<footer>ITDN Dashboard &mdash; auto-refreshes every 30 s &mdash; data from <code>/api/v1/alerts</code></footer>
+
+<script>
+"use strict";
+
+const API_ALERTS = "/api/v1/alerts?limit=200";
+const API_HEALTH = "/api/v1/health";
+const REFRESH_MS = 30_000;
+
+// ── Health probe ──────────────────────────────────────────────────────────────
+
+async function checkHealth() {
+  const dot = document.getElementById("status-dot");
+  const lbl = document.getElementById("server-status");
+  try {
+    const r = await fetch(API_HEALTH);
+    if (r.ok) {
+      dot.className = "ok";
+      lbl.textContent = "Server online";
+    } else {
+      throw new Error(r.status);
+    }
+  } catch (e) {
+    dot.className = "err";
+    lbl.textContent = "Server unreachable";
+  }
+}
+
+// ── Load and render alerts ────────────────────────────────────────────────────
+
+async function loadAlerts() {
+  let alerts = [];
+  try {
+    const r = await fetch(API_ALERTS);
+    const data = await r.json();
+    alerts = data.alerts || [];
+  } catch (e) {
+    document.getElementById("alerts-container").innerHTML =
+      `<div class="empty-msg">Failed to load alerts: ${e.message}</div>`;
+    return;
+  }
+
+  const open = alerts.filter(a => !a.acknowledged);
+  const acked = alerts.filter(a => a.acknowledged);
+
+  // Stats
+  document.getElementById("stat-open").textContent = open.length;
+  document.getElementById("stat-critical").textContent =
+    open.filter(a => a.severity === "CRITICAL").length;
+  document.getElementById("stat-high").textContent =
+    open.filter(a => a.severity === "HIGH").length;
+  document.getElementById("stat-acked").textContent = acked.length;
+
+  const hostSet = new Set(open.map(a => a.hostname));
+  document.getElementById("stat-hosts").textContent = hostSet.size;
+
+  // Alerts table
+  renderAlertsTable(open);
+
+  // Top hosts
+  renderTopHosts(open);
+
+  // Last refresh time
+  document.getElementById("last-refresh").textContent =
+    "Last refresh: " + new Date().toLocaleTimeString();
+}
+
+function renderAlertsTable(open) {
+  const container = document.getElementById("alerts-container");
+  if (!open.length) {
+    container.innerHTML = '<div class="empty-msg">✓ No open alerts</div>';
+    return;
+  }
+
+  // Sort by severity weight desc, then created_at desc
+  const sev = { CRITICAL: 4, HIGH: 3, MEDIUM: 2, LOW: 1 };
+  const sorted = [...open].sort((a, b) =>
+    (sev[b.severity] || 0) - (sev[a.severity] || 0) ||
+    b.created_at.localeCompare(a.created_at)
+  );
+
+  const rows = sorted.map(a => `
+    <tr id="alert-row-${a.id}">
+      <td title="${a.created_at}">${a.created_at.replace("T", " ").slice(0, 19)}</td>
+      <td>${escHtml(a.hostname)}</td>
+      <td>${escHtml(a.device_id)}</td>
+      <td>${escHtml(a.rule_name)}</td>
+      <td><span class="badge badge-${a.severity}">${a.severity}</span></td>
+      <td title="${escHtml(a.description)}">${escHtml(a.description.slice(0, 80))}…</td>
+      <td>
+        <button class="ack-btn" onclick="ackAlert(${a.id})">Ack</button>
+      </td>
+    </tr>
+  `).join("");
+
+  container.innerHTML = `
+    <table>
+      <thead>
+        <tr>
+          <th>Time</th><th>Host</th><th>Device</th>
+          <th>Rule</th><th>Severity</th><th>Description</th><th></th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+function renderTopHosts(open) {
+  const container = document.getElementById("hosts-container");
+  if (!open.length) {
+    container.innerHTML = '<div class="empty-msg">No data</div>';
+    return;
+  }
+
+  const counts = {};
+  for (const a of open) {
+    counts[a.hostname] = (counts[a.hostname] || 0) + 1;
+  }
+  const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 10);
+
+  const rows = sorted.map(([host, count]) => `
+    <tr>
+      <td>${escHtml(host)}</td>
+      <td>${count}</td>
+    </tr>
+  `).join("");
+
+  container.innerHTML = `
+    <table>
+      <thead><tr><th>Hostname</th><th>Open Alerts</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+// ── Acknowledge ───────────────────────────────────────────────────────────────
+
+async function ackAlert(id) {
+  try {
+    const r = await fetch(`/api/v1/alerts/${id}/ack`, { method: "PATCH" });
+    if (r.ok) {
+      const row = document.getElementById(`alert-row-${id}`);
+      if (row) row.remove();
+      // Reload to update stats
+      loadAlerts();
+    } else {
+      const body = await r.json();
+      alert("Failed to acknowledge: " + (body.error || r.status));
+    }
+  } catch (e) {
+    alert("Network error: " + e.message);
+  }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function escHtml(str) {
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+// ── Boot ──────────────────────────────────────────────────────────────────────
+
+(async function init() {
+  await checkHealth();
+  await loadAlerts();
+  setInterval(async () => {
+    await checkHealth();
+    await loadAlerts();
+  }, REFRESH_MS);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,32 @@
+[Unit]
+Description=ITDN Endpoint Agent – USB/Bluetooth Peripheral Monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart={{ itdn_install_dir }}/venv/bin/python -m agent.main
+WorkingDirectory={{ itdn_install_dir }}
+Restart=on-failure
+RestartSec=5s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=itdn-agent
+
+# Environment
+Environment=ITDN_SERVER_URL={{ server_url }}
+Environment=ITDN_SERVER_CERT={{ itdn_cert_dir }}/siem-ca.crt
+Environment=ITDN_AGENT_CERT={{ itdn_cert_dir }}/agent.crt
+Environment=ITDN_AGENT_KEY={{ itdn_cert_dir }}/agent.key
+Environment=ITDN_LOG_DIR={{ itdn_log_dir }}
+Environment=ITDN_LOG_LEVEL={{ itdn_log_level }}
+Environment=ITDN_FLUSH_INTERVAL={{ flush_interval }}
+
+# Hardening
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths={{ itdn_log_dir }}
+
+[Install]
+WantedBy=multi-user.target

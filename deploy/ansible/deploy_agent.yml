@@ -1,0 +1,142 @@
+---
+# deploy/ansible/deploy_agent.yml – Mass-deploy the ITDN endpoint agent
+#
+# Usage:
+#   ansible-playbook deploy/ansible/deploy_agent.yml \
+#     -i hosts.ini \
+#     --extra-vars "server_url=https://siem.internal:8443 certs_dir=./certs"
+#
+# hosts.ini example:
+#   [endpoints]
+#   ws-laptop-01 ansible_user=analyst
+#   ws-desktop-02 ansible_user=analyst
+#
+# Variables (set in host_vars, group_vars, or --extra-vars):
+#   server_url      URL of the ITDN central server
+#   certs_dir       Local path to the directory produced by gen_certs.sh
+#   agent_name      Basename of the agent cert files (default: inventory_hostname)
+#   itdn_log_dir    Remote log directory (default: /var/log/itdn)
+#   itdn_log_level  Log level: DEBUG | INFO | WARNING (default: INFO)
+#   flush_interval  Seconds between event batch flushes (default: 10)
+
+- name: Deploy ITDN endpoint agent
+  hosts: endpoints
+  become: true
+  gather_facts: true
+
+  vars:
+    server_url: "https://siem.internal:8443"
+    certs_dir: "{{ playbook_dir }}/../../certs"
+    agent_name: "{{ inventory_hostname }}"
+    itdn_install_dir: /opt/itdn
+    itdn_log_dir: /var/log/itdn
+    itdn_cert_dir: /etc/itdn
+    itdn_log_level: INFO
+    flush_interval: 10
+    python_bin: python3
+
+  tasks:
+
+    # ── Python & dependencies ─────────────────────────────────────────────────
+
+    - name: Ensure Python 3 and pip are installed
+      package:
+        name:
+          - python3
+          - python3-pip
+          - python3-venv
+        state: present
+
+    - name: Create installation directory
+      file:
+        path: "{{ itdn_install_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Copy agent source code
+      synchronize:
+        src: "{{ playbook_dir }}/../../agent/"
+        dest: "{{ itdn_install_dir }}/agent/"
+        delete: true
+        rsync_opts:
+          - "--exclude=__pycache__"
+          - "--exclude=*.pyc"
+
+    - name: Copy requirements.txt
+      copy:
+        src: "{{ playbook_dir }}/../../requirements.txt"
+        dest: "{{ itdn_install_dir }}/requirements.txt"
+
+    - name: Create Python virtual environment
+      command: "{{ python_bin }} -m venv {{ itdn_install_dir }}/venv"
+      args:
+        creates: "{{ itdn_install_dir }}/venv/bin/python"
+
+    - name: Install Python dependencies
+      pip:
+        requirements: "{{ itdn_install_dir }}/requirements.txt"
+        extra_args: "--no-cache-dir"
+        virtualenv: "{{ itdn_install_dir }}/venv"
+
+    - name: Install pyudev on Linux endpoints
+      pip:
+        name: "pyudev>=0.24"
+        virtualenv: "{{ itdn_install_dir }}/venv"
+      when: ansible_facts['os_family'] == 'Debian' or ansible_facts['os_family'] == 'RedHat'
+
+    # ── TLS certificates ──────────────────────────────────────────────────────
+
+    - name: Create certificate directory
+      file:
+        path: "{{ itdn_cert_dir }}"
+        state: directory
+        mode: "0700"
+
+    - name: Deploy CA certificate (trust anchor)
+      copy:
+        src: "{{ certs_dir }}/ca.crt"
+        dest: "{{ itdn_cert_dir }}/siem-ca.crt"
+        mode: "0644"
+
+    - name: Deploy agent certificate
+      copy:
+        src: "{{ certs_dir }}/{{ agent_name }}.crt"
+        dest: "{{ itdn_cert_dir }}/agent.crt"
+        mode: "0644"
+
+    - name: Deploy agent private key
+      copy:
+        src: "{{ certs_dir }}/{{ agent_name }}.key"
+        dest: "{{ itdn_cert_dir }}/agent.key"
+        mode: "0600"
+
+    # ── Log directory ─────────────────────────────────────────────────────────
+
+    - name: Create log directory
+      file:
+        path: "{{ itdn_log_dir }}"
+        state: directory
+        mode: "0750"
+
+    # ── Systemd service ───────────────────────────────────────────────────────
+
+    - name: Install systemd service unit
+      template:
+        src: itdn-agent.service.j2
+        dest: /etc/systemd/system/itdn-agent.service
+        mode: "0644"
+      notify: Reload systemd and restart agent
+
+    - name: Enable and start agent service
+      systemd:
+        name: itdn-agent
+        enabled: true
+        state: started
+        daemon_reload: true
+
+  handlers:
+    - name: Reload systemd and restart agent
+      systemd:
+        name: itdn-agent
+        state: restarted
+        daemon_reload: true
