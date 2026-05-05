@@ -499,10 +499,23 @@ def get_timeline(
 # Remote log anchoring
 # ---------------------------------------------------------------------------
 
+# Process-scoped fallback HMAC key used when neither TLS key nor ITDN_API_KEY
+# is configured (dev/test only).  Generated once per process; not persisted
+# so signatures will differ across restarts.
+import secrets as _secrets
+_ANCHOR_FALLBACK_KEY: str = _secrets.token_hex(32)
+
+
+def _anchor_fallback_key() -> str:
+    return _ANCHOR_FALLBACK_KEY
+
+
 def insert_anchor(agent_id: str, chain_head_hash: str) -> str:
     """Sign chain_head_hash with server's RSA private key (or HMAC fallback) and store anchor."""
+    import hashlib
+    import hmac
+    import os
     from server.config import TLS_KEY, API_SECRET_KEY
-    import os, hashlib, hmac
 
     sig = ""
     # Try RSA signing with TLS key
@@ -521,10 +534,12 @@ def insert_anchor(agent_id: str, chain_head_hash: str) -> str:
         except Exception:
             sig = ""
 
-    # Fallback: HMAC-SHA256 with API key.
-    # HMAC handles arbitrary-length keys natively; no pre-hashing is needed.
+    # Fallback: HMAC-SHA256 with the configured API key.
+    # When API_SECRET_KEY is not set (dev/test), fall back to a process-scoped
+    # random key so signatures are not predictable, though they will differ
+    # across restarts.  Production deployments must set ITDN_API_KEY.
     if not sig:
-        mac_key = (API_SECRET_KEY or "itdn-default-anchor-key").encode()
+        mac_key = (API_SECRET_KEY or _anchor_fallback_key()).encode()
         sig = hmac.new(mac_key, chain_head_hash.encode(), hashlib.sha256).hexdigest()
 
     now = _utcnow()
