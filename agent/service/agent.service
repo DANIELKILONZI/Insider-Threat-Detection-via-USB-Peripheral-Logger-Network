@@ -1,0 +1,17 @@
+[Unit]
+Description=Insider Threat USB/BT Detection Agent
+After=network.target
+
+[Service]
+Type=simple
+User=nobody
+ExecStart=/usr/bin/python3 -m agent.main
+WorkingDirectory=/opt/insider-threat-agent
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=insider-threat-agent
+
+[Install]
+WantedBy=multi-user.target
