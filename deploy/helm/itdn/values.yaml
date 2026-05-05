@@ -1,0 +1,106 @@
+# deploy/helm/itdn/values.yaml – Default values for the ITDN Helm chart.
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/danielkilonzi/itdn-server
+  pullPolicy: IfNotPresent
+  tag: ""  # Defaults to Chart.appVersion
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+service:
+  type: ClusterIP
+  port: 8443
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: itdn.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+# ── Persistence (SQLite) ──────────────────────────────────────────────────────
+persistence:
+  enabled: true
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  size: 10Gi
+  mountPath: /var/lib/itdn
+
+# ── TLS certificates ──────────────────────────────────────────────────────────
+tls:
+  # Name of an existing Secret containing tls.crt, tls.key, and ca.crt.
+  # If empty, TLS is disabled (HTTP only – suitable for dev/test behind a proxy).
+  existingSecret: ""
+
+# ── Server configuration (maps to env vars) ──────────────────────────────────
+config:
+  # API authentication
+  apiKey: ""
+  # apiKeys: '{"adminkey": "admin", "analystkey": "analyst"}'
+
+  # Log retention
+  retentionDays: 90
+
+  # Alert notification
+  smtpHost: ""
+  smtpPort: 587
+  smtpFrom: "itdn-alerts@localhost"
+  smtpTo: ""
+  smtpUseTls: "true"
+  slackWebhookUrl: ""
+  notifyMinSeverity: "HIGH"
+
+  # Threat feed
+  threatFeedUrl: ""
+
+# ── PostgreSQL sidecar (optional) ─────────────────────────────────────────────
+postgresql:
+  enabled: false
+  auth:
+    username: itdn
+    password: ""
+    database: itdn
+  primary:
+    persistence:
+      enabled: true
+      size: 20Gi
+
+# ── Prometheus ServiceMonitor ─────────────────────────────────────────────────
+serviceMonitor:
+  enabled: false
+  namespace: ""
+  interval: 30s
+  scrapeTimeout: 10s
+  labels: {}
+
+# ── Pod security ──────────────────────────────────────────────────────────────
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  capabilities:
+    drop: ["ALL"]
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

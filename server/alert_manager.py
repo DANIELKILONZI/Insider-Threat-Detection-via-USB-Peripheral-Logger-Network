@@ -16,6 +16,7 @@ import server.es_forwarder as es
 import server.splunk_forwarder as splunk
 from server.config import ALERT_DEDUP_WINDOW_SECS
 from server.metrics import METRICS
+from server.notifiers import notify
 from server.rules import Alert
 
 logger = logging.getLogger(__name__)
@@ -73,3 +74,4 @@ def process_alerts(event: EventDict, alerts: list[Alert]) -> None:
         }
         splunk.forward_alert(alert_payload)
         es.forward_alert(alert_payload)
+        notify(alert_payload)

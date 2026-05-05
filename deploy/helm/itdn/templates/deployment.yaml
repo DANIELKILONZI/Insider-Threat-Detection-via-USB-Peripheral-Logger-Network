@@ -1,0 +1,124 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "itdn.fullname" . }}
+  labels:
+    {{- include "itdn.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "itdn.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "itdn.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: https
+              containerPort: 8443
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: https
+              scheme: {{ if .Values.tls.existingSecret }}HTTPS{{ else }}HTTP{{ end }}
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: https
+              scheme: {{ if .Values.tls.existingSecret }}HTTPS{{ else }}HTTP{{ end }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          env:
+            - name: ITDN_SERVER_HOST
+              value: "0.0.0.0"
+            - name: ITDN_SERVER_PORT
+              value: "8443"
+            - name: ITDN_DB_PATH
+              value: "{{ .Values.persistence.mountPath }}/itdn.db"
+            - name: ITDN_RETENTION_DAYS
+              value: "{{ .Values.config.retentionDays }}"
+            - name: ITDN_NOTIFY_MIN_SEVERITY
+              value: "{{ .Values.config.notifyMinSeverity }}"
+            {{- if .Values.config.apiKey }}
+            - name: ITDN_API_KEY
+              value: "{{ .Values.config.apiKey }}"
+            {{- end }}
+            {{- if .Values.config.smtpHost }}
+            - name: ITDN_SMTP_HOST
+              value: "{{ .Values.config.smtpHost }}"
+            - name: ITDN_SMTP_PORT
+              value: "{{ .Values.config.smtpPort }}"
+            - name: ITDN_SMTP_FROM
+              value: "{{ .Values.config.smtpFrom }}"
+            - name: ITDN_SMTP_TO
+              value: "{{ .Values.config.smtpTo }}"
+            - name: ITDN_SMTP_USE_TLS
+              value: "{{ .Values.config.smtpUseTls }}"
+            {{- end }}
+            {{- if .Values.config.slackWebhookUrl }}
+            - name: ITDN_SLACK_WEBHOOK_URL
+              value: "{{ .Values.config.slackWebhookUrl }}"
+            {{- end }}
+            {{- if .Values.config.threatFeedUrl }}
+            - name: ITDN_THREAT_FEED_URL
+              value: "{{ .Values.config.threatFeedUrl }}"
+            {{- end }}
+            {{- if .Values.tls.existingSecret }}
+            - name: ITDN_TLS_CERT
+              value: /etc/itdn/tls.crt
+            - name: ITDN_TLS_KEY
+              value: /etc/itdn/tls.key
+            - name: ITDN_CA_CERT
+              value: /etc/itdn/ca.crt
+            {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: {{ .Values.persistence.mountPath }}
+            {{- if .Values.tls.existingSecret }}
+            - name: tls
+              mountPath: /etc/itdn
+              readOnly: true
+            {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "itdn.fullname" . }}-data
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- if .Values.tls.existingSecret }}
+        - name: tls
+          secret:
+            secretName: {{ .Values.tls.existingSecret }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

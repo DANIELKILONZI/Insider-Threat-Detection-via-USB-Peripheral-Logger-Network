@@ -1,0 +1,14 @@
+apiVersion: v2
+name: itdn
+description: Insider Threat Detection Network – central server Helm chart
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+keywords:
+  - security
+  - usb
+  - insider-threat
+  - soc
+home: https://github.com/DANIELKILONZI/Insider-Threat-Detection-via-USB-Peripheral-Logger-Network
+maintainers:
+  - name: ITDN Team

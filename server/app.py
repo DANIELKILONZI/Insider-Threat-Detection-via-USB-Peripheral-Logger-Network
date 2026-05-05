@@ -52,7 +52,7 @@ import server.database as db
 import server.es_forwarder as es
 import server.splunk_forwarder as splunk
 from server.alert_manager import process_alerts
-from server.auth import rate_limit, require_api_key
+from server.auth import rate_limit, require_api_key, require_role
 from server.logging_config import setup_logging
 from server.metrics import METRICS
 from server.rule_config import get_config, update_config
@@ -112,6 +112,18 @@ def ingest_events():
             device_id = event.get("device_id", "")
             if hostname and device_id:
                 db.update_device_baseline(hostname, device_id)
+                # User behaviour analytics – update per-user baseline if 'user' is present
+                username = event.get("user", "")
+                if username:
+                    db.update_user_baseline(username, hostname, device_id)
+                # Timezone inference: record UTC offset from event timestamp when provided
+                ts_str = event.get("timestamp", "")
+                utc_offset = event.get("utc_offset_hours")
+                if utc_offset is not None:
+                    try:
+                        db.update_host_timezone(hostname, float(utc_offset))
+                    except Exception:  # pylint: disable=broad-except
+                        pass
             if alerts:
                 process_alerts(event, alerts)
                 from server.risk_scoring import RiskScorer
@@ -132,6 +144,7 @@ def ingest_events():
 # ---------------------------------------------------------------------------
 
 @app.route("/api/v1/alerts/<int:alert_id>/ack", methods=["PATCH"])
+@require_role("analyst")
 def ack_alert(alert_id: int):
     updated = db.acknowledge_alert(alert_id)
     if not updated:
@@ -200,6 +213,7 @@ def get_runtime_config():
 
 
 @app.route("/api/v1/config", methods=["PATCH"])
+@require_role("admin")
 def patch_runtime_config():
     data = request.get_json(silent=True)
     if not data or not isinstance(data, dict):
@@ -335,7 +349,7 @@ def get_attack_graph():
 # ---------------------------------------------------------------------------
 
 @app.route("/api/v1/integrity/register", methods=["POST"])
-@require_api_key
+@require_role("admin")
 def integrity_register():
     data = request.get_json(silent=True)
     if not data:
@@ -363,6 +377,53 @@ def integrity_check():
 
 
 # ---------------------------------------------------------------------------
+# User behaviour analytics
+# ---------------------------------------------------------------------------
+
+@app.route("/api/v1/uba/baseline", methods=["GET"])
+def get_uba_baseline():
+    username = request.args.get("username")
+    if not username:
+        return jsonify({"error": "username query parameter required"}), 400
+    baseline = db.get_user_baseline(username)
+    return jsonify({"username": username, "baseline": baseline, "count": len(baseline)}), 200
+
+
+# ---------------------------------------------------------------------------
+# Threat feed management
+# ---------------------------------------------------------------------------
+
+@app.route("/api/v1/threat_feed/reload", methods=["POST"])
+@require_role("admin")
+def reload_threat_feed():
+    from server.threat_feed import reload as tf_reload
+    count = tf_reload()
+    return jsonify({"ok": True, "entries": count}), 200
+
+
+@app.route("/api/v1/threat_feed", methods=["GET"])
+def get_threat_feed():
+    from server.threat_feed import get_feed
+    entries = sorted(get_feed())
+    return jsonify({"entries": entries, "count": len(entries)}), 200
+
+
+# ---------------------------------------------------------------------------
+# Log retention (admin only)
+# ---------------------------------------------------------------------------
+
+@app.route("/api/v1/maintenance/purge", methods=["POST"])
+@require_role("admin")
+def purge_old_data():
+    from server.config import RETENTION_DAYS
+    data = request.get_json(silent=True) or {}
+    retention_days = int(data.get("retention_days", RETENTION_DAYS))
+    counts = db.purge_old_records(retention_days)
+    logger.info("Manual purge completed: %s", counts)
+    return jsonify({"ok": True, "deleted": counts, "retention_days": retention_days}), 200
+
+
+# ---------------------------------------------------------------------------
 # Bootstrap
 # ---------------------------------------------------------------------------
 
@@ -374,7 +435,29 @@ def create_app() -> Flask:
     METRICS.set_active_alert_callback(
         lambda: len(db.list_alerts(acknowledged=False, limit=100_000))
     )
+    # Start background retention worker (runs once per day)
+    _start_retention_worker()
     return app
+
+
+def _start_retention_worker() -> None:
+    """Start a daemon thread that periodically purges old records."""
+    import threading as _threading
+    import time as _time
+    from server.config import RETENTION_DAYS
+
+    def _worker() -> None:
+        _INTERVAL = 86400  # run daily
+        while True:
+            _time.sleep(_INTERVAL)
+            try:
+                counts = db.purge_old_records(RETENTION_DAYS)
+                logger.info("Retention purge: %s (retention=%d days)", counts, RETENTION_DAYS)
+            except Exception:  # pylint: disable=broad-except
+                logger.exception("Retention purge failed")
+
+    t = _threading.Thread(target=_worker, daemon=True, name="retention-worker")
+    t.start()
 
 
 if __name__ == "__main__":

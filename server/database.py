@@ -162,6 +162,29 @@ _agent_integrity_tbl = sa.Table(
     sa.Column("registered_at", sa.Text, nullable=False),
 )
 
+# User behaviour analytics: per-user device baseline
+_user_baseline_tbl = sa.Table(
+    "user_baseline",
+    _metadata,
+    sa.Column("id", sa.Integer, primary_key=True, autoincrement=True),
+    sa.Column("username", sa.Text, nullable=False),
+    sa.Column("hostname", sa.Text, nullable=False),
+    sa.Column("device_id", sa.Text, nullable=False),
+    sa.Column("first_seen", sa.Text, nullable=False),
+    sa.Column("last_seen", sa.Text, nullable=False),
+    sa.Column("seen_count", sa.Integer, default=1),
+)
+
+# Per-host observed timezone offset (hours from UTC, float)
+_host_timezone_tbl = sa.Table(
+    "host_timezone",
+    _metadata,
+    sa.Column("id", sa.Integer, primary_key=True, autoincrement=True),
+    sa.Column("hostname", sa.Text, nullable=False, unique=True),
+    sa.Column("utc_offset_hours", sa.Float, nullable=False, default=0.0),
+    sa.Column("updated_at", sa.Text, nullable=False),
+)
+
 
 def init_db() -> None:
     """Create tables and indexes if they don't exist.  Safe to call every startup."""
@@ -691,3 +714,139 @@ def check_agent_hash(agent_id: str, agent_hash: str) -> tuple:
         return False, ""
     stored = row[0]
     return stored == agent_hash, stored
+
+
+# ---------------------------------------------------------------------------
+# Log retention / purge
+# ---------------------------------------------------------------------------
+
+def purge_old_records(retention_days: int) -> dict:
+    """
+    Delete events, alerts, and audit_chain records older than *retention_days*.
+
+    Returns a dict with the count of rows deleted from each table:
+    ``{"events": N, "alerts": N, "audit_chain": N}``.
+    """
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(days=retention_days)
+    ).strftime("%Y-%m-%d %H:%M:%S")
+    counts: dict = {}
+    with _lock:
+        with _get_engine().begin() as conn:
+            for table, col in [
+                ("events", "received_at"),
+                ("alerts", "created_at"),
+                ("audit_chain", "recorded_at"),
+            ]:
+                result = conn.execute(
+                    text(f"DELETE FROM {table} WHERE {col} < :cutoff"),  # noqa: S608
+                    {"cutoff": cutoff},
+                )
+                counts[table] = result.rowcount
+    return counts
+
+
+# ---------------------------------------------------------------------------
+# User behaviour analytics (UBA) – per-user device baseline
+# ---------------------------------------------------------------------------
+
+def update_user_baseline(username: str, hostname: str, device_id: str) -> None:
+    """Upsert per-user device baseline: insert first sight, bump seen_count after."""
+    now = _utcnow()
+    with _lock:
+        with _get_engine().begin() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT id, seen_count FROM user_baseline "
+                    "WHERE username=:username AND hostname=:hostname AND device_id=:device_id"
+                ),
+                {"username": username, "hostname": hostname, "device_id": device_id},
+            ).fetchone()
+            if row:
+                conn.execute(
+                    text(
+                        "UPDATE user_baseline SET last_seen=:ls, seen_count=:sc WHERE id=:id"
+                    ),
+                    {"ls": now, "sc": (row[1] or 0) + 1, "id": row[0]},
+                )
+            else:
+                conn.execute(
+                    _user_baseline_tbl.insert().values(
+                        username=username,
+                        hostname=hostname,
+                        device_id=device_id,
+                        first_seen=now,
+                        last_seen=now,
+                        seen_count=1,
+                    )
+                )
+
+
+def user_device_is_new(username: str, hostname: str, device_id: str) -> bool:
+    """Return True if *device_id* has never been seen by *username* on *hostname*."""
+    with _lock:
+        with _get_engine().connect() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT 1 FROM user_baseline "
+                    "WHERE username=:username AND hostname=:hostname AND device_id=:device_id LIMIT 1"
+                ),
+                {"username": username, "hostname": hostname, "device_id": device_id},
+            ).fetchone()
+    return row is None
+
+
+def get_user_baseline(username: str) -> List[Dict[str, Any]]:
+    """Return all baseline device records for *username* across all hosts."""
+    with _lock:
+        with _get_engine().connect() as conn:
+            rows = conn.execute(
+                text(
+                    "SELECT * FROM user_baseline WHERE username=:username "
+                    "ORDER BY first_seen ASC"
+                ),
+                {"username": username},
+            ).mappings().fetchall()
+    return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Per-host timezone inference
+# ---------------------------------------------------------------------------
+
+def update_host_timezone(hostname: str, utc_offset_hours: float) -> None:
+    """Record (or update) the inferred UTC offset for *hostname*."""
+    now = _utcnow()
+    with _lock:
+        with _get_engine().begin() as conn:
+            row = conn.execute(
+                text("SELECT id FROM host_timezone WHERE hostname=:hostname"),
+                {"hostname": hostname},
+            ).fetchone()
+            if row:
+                conn.execute(
+                    text(
+                        "UPDATE host_timezone SET utc_offset_hours=:off, updated_at=:ua "
+                        "WHERE hostname=:hostname"
+                    ),
+                    {"off": utc_offset_hours, "ua": now, "hostname": hostname},
+                )
+            else:
+                conn.execute(
+                    _host_timezone_tbl.insert().values(
+                        hostname=hostname,
+                        utc_offset_hours=utc_offset_hours,
+                        updated_at=now,
+                    )
+                )
+
+
+def get_host_timezone(hostname: str) -> Optional[float]:
+    """Return the stored UTC offset (hours) for *hostname*, or None if unknown."""
+    with _lock:
+        with _get_engine().connect() as conn:
+            row = conn.execute(
+                text("SELECT utc_offset_hours FROM host_timezone WHERE hostname=:hostname"),
+                {"hostname": hostname},
+            ).fetchone()
+    return float(row[0]) if row else None

@@ -53,6 +53,10 @@ class _ServerSettings(BaseSettings):
 
     # ── API security ──────────────────────────────────────────────────────────
     ITDN_API_KEY: str = Field(default="")
+    # RBAC: JSON map of "key" -> "role" where role is admin|analyst|readonly.
+    # Example: '{"secret123": "admin", "readkey": "readonly"}'
+    # When set, ITDN_API_KEY is ignored in favour of this map.
+    ITDN_API_KEYS: str = Field(default="")
 
     # ── Honeypot detection ────────────────────────────────────────────────────
     ITDN_HONEYPOT_VIDS: str = Field(default="")
@@ -60,6 +64,27 @@ class _ServerSettings(BaseSettings):
     # ── Rate limiting ─────────────────────────────────────────────────────────
     ITDN_RATE_LIMIT_MAX: int = Field(default=200, gt=0)
     ITDN_RATE_LIMIT_WINDOW_SECS: int = Field(default=60, gt=0)
+
+    # ── Alert notification channels ───────────────────────────────────────────
+    ITDN_SMTP_HOST: str = Field(default="")
+    ITDN_SMTP_PORT: int = Field(default=587)
+    ITDN_SMTP_USER: str = Field(default="")
+    ITDN_SMTP_PASSWORD: str = Field(default="")
+    ITDN_SMTP_FROM: str = Field(default="itdn-alerts@localhost")
+    ITDN_SMTP_TO: str = Field(default="")       # comma-separated recipient list
+    ITDN_SMTP_USE_TLS: bool = Field(default=True)
+    ITDN_SLACK_WEBHOOK_URL: str = Field(default="")
+    # Minimum severity to emit notifications: LOW | MEDIUM | HIGH | CRITICAL
+    ITDN_NOTIFY_MIN_SEVERITY: str = Field(default="HIGH")
+
+    # ── Log retention ─────────────────────────────────────────────────────────
+    ITDN_RETENTION_DAYS: int = Field(default=90, gt=0)
+
+    # ── Threat feed ───────────────────────────────────────────────────────────
+    # Path to a local newline-delimited file of malicious VID:PID values.
+    ITDN_THREAT_FEED_PATH: str = Field(default="")
+    # Remote URL to fetch the threat feed from (fetched once on startup).
+    ITDN_THREAT_FEED_URL: str = Field(default="")
 
 
 _s = _ServerSettings()
@@ -87,7 +112,23 @@ RAPID_CYCLE_WINDOW_SECS: int = _s.ITDN_RAPID_CYCLE_WINDOW_SECS
 ALERT_DEDUP_WINDOW_SECS: int = _s.ITDN_ALERT_DEDUP_SECS
 
 API_SECRET_KEY: str = _s.ITDN_API_KEY
+API_KEYS: str = _s.ITDN_API_KEYS
 RATE_LIMIT_MAX: int = _s.ITDN_RATE_LIMIT_MAX
 RATE_LIMIT_WINDOW_SECS: int = _s.ITDN_RATE_LIMIT_WINDOW_SECS
+
+SMTP_HOST: str = _s.ITDN_SMTP_HOST
+SMTP_PORT: int = _s.ITDN_SMTP_PORT
+SMTP_USER: str = _s.ITDN_SMTP_USER
+SMTP_PASSWORD: str = _s.ITDN_SMTP_PASSWORD
+SMTP_FROM: str = _s.ITDN_SMTP_FROM
+SMTP_TO: str = _s.ITDN_SMTP_TO
+SMTP_USE_TLS: bool = _s.ITDN_SMTP_USE_TLS
+SLACK_WEBHOOK_URL: str = _s.ITDN_SLACK_WEBHOOK_URL
+NOTIFY_MIN_SEVERITY: str = _s.ITDN_NOTIFY_MIN_SEVERITY
+
+RETENTION_DAYS: int = _s.ITDN_RETENTION_DAYS
+
+THREAT_FEED_PATH: str = _s.ITDN_THREAT_FEED_PATH
+THREAT_FEED_URL: str = _s.ITDN_THREAT_FEED_URL
 
 HONEYPOT_VIDS: str = _s.ITDN_HONEYPOT_VIDS

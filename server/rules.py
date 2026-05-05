@@ -12,10 +12,15 @@ does not.
 
 Rules implemented
 -----------------
-1. after_hours_device    – USB/BT device connected outside business hours
-2. unknown_device        – device ID never seen before on this host
-3. high_volume_transfer  – cumulative bytes transferred in last hour > threshold
-4. rapid_cycle           – ≥ N connect/disconnect events within a short window
+1. after_hours_device      – USB/BT device connected outside business hours
+                             (timezone-aware: uses per-host UTC offset when known)
+2. unknown_device          – device ID never seen before on this host
+3. high_volume_transfer    – cumulative bytes transferred in last hour > threshold
+4. rapid_cycle             – ≥ N connect/disconnect events within a short window
+5. cross_agent_device      – same device seen on multiple hosts within an hour
+6. honeypot_device         – device matches a configured honeypot VID:PID
+7. known_malicious_device  – device VID:PID found in the threat feed (CRITICAL)
+8. user_unknown_device     – device never seen before by this specific user (UBA)
 """
 
 from __future__ import annotations
@@ -43,7 +48,13 @@ class Alert(NamedTuple):
 # ---------------------------------------------------------------------------
 
 def rule_after_hours_device(event: EventDict, db: Any) -> Optional[Alert]:
-    """Fire when a device is *connected* outside of business hours."""
+    """Fire when a device is *connected* outside of business hours.
+
+    When a per-host UTC offset has been recorded via the timezone inference
+    subsystem, the event timestamp is adjusted to local time before the
+    after-hours window is evaluated.  This prevents false positives for
+    agents in non-UTC timezones.
+    """
     if event.get("event_type") != "connected":
         return None
 
@@ -58,6 +69,15 @@ def rule_after_hours_device(event: EventDict, db: Any) -> Optional[Alert]:
     except (ValueError, TypeError):
         ts = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
 
+    # Apply per-host timezone offset when available
+    hostname = event.get("hostname", "")
+    try:
+        offset = db.get_host_timezone(hostname)
+        if offset is not None:
+            ts = ts + datetime.timedelta(hours=offset)
+    except Exception:  # pylint: disable=broad-except
+        pass  # db may not have the function in tests
+
     hour = ts.hour
     # After-hours is after_hours_start .. midnight .. after_hours_end
     if after_hours_start <= hour or hour < after_hours_end:
@@ -66,7 +86,7 @@ def rule_after_hours_device(event: EventDict, db: Any) -> Optional[Alert]:
             severity="HIGH",
             description=(
                 f"Device {event.get('device_id')} connected at {ts_str} "
-                f"on host {event.get('hostname')} – outside business hours "
+                f"on host {hostname} – outside business hours "
                 f"({after_hours_start:02d}:00–{after_hours_end:02d}:00)."
             ),
         )
@@ -189,6 +209,51 @@ def rule_honeypot_device(event: EventDict, db: Any) -> Optional[Alert]:
     return None
 
 
+def rule_known_malicious_device(event: EventDict, db: Any) -> Optional[Alert]:
+    """Fire CRITICAL when the device VID:PID appears in the threat feed."""
+    if event.get("event_type") != "connected":
+        return None
+    from server.threat_feed import is_known_malicious
+    device_id = event.get("device_id", "")
+    if device_id and is_known_malicious(device_id):
+        return Alert(
+            rule_name="known_malicious_device",
+            severity="CRITICAL",
+            description=(
+                f"Known-malicious device {device_id} connected to "
+                f"{event.get('hostname', 'unknown')} – matches threat feed entry."
+            ),
+        )
+    return None
+
+
+def rule_user_unknown_device(event: EventDict, db: Any) -> Optional[Alert]:
+    """Fire when the current user has never been seen using this device before (UBA).
+
+    The event must include a non-empty ``user`` field for this rule to fire.
+    """
+    if event.get("event_type") != "connected":
+        return None
+    username = event.get("user", "")
+    if not username:
+        return None
+    hostname = event.get("hostname", "")
+    device_id = event.get("device_id", "")
+    try:
+        if db.user_device_is_new(username, hostname, device_id):
+            return Alert(
+                rule_name="user_unknown_device",
+                severity="HIGH",
+                description=(
+                    f"User '{username}' has never previously used device {device_id} "
+                    f"on host {hostname} – possible credential-sharing or theft."
+                ),
+            )
+    except Exception:  # pylint: disable=broad-except
+        pass  # db may not have UBA methods in older deployments
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -200,6 +265,8 @@ _RULES = [
     rule_rapid_cycle,
     rule_cross_agent_device,
     rule_honeypot_device,
+    rule_known_malicious_device,
+    rule_user_unknown_device,
 ]
 
 
