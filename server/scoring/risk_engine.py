@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.config import config
-from server.models import Alert, BaselineDevice, Event
+from server.models import Alert, AllowlistedDevice, BaselineDevice, Event
 from shared.schema import NormalizedEvent
 
 logger = logging.getLogger(__name__)
@@ -60,6 +60,20 @@ class RiskEngine:
         return False
 
     # ------------------------------------------------------------------
+    async def _is_allowlisted(self, agent_id: str, device_id: str, db: AsyncSession) -> bool:
+        """Return True if device_id is on the per-agent or org-wide allowlist."""
+        result = await db.execute(
+            select(AllowlistedDevice).where(
+                (AllowlistedDevice.device_id == device_id)
+                & (
+                    (AllowlistedDevice.agent_id == agent_id)
+                    | (AllowlistedDevice.agent_id == "*")
+                )
+            )
+        )
+        return result.scalars().first() is not None
+
+    # ------------------------------------------------------------------
     async def score_event(
         self, event: NormalizedEvent, db: AsyncSession
     ) -> Tuple[float, Optional[Alert]]:
@@ -83,6 +97,9 @@ class RiskEngine:
 
         # new_device: first time this agent has ever seen this device (no baseline row)
         # unknown_device: device seen before but less than 3 times (not established as normal)
+        # Skip both rules when the device is on the allowlist.
+        allowlisted = await self._is_allowlisted(event.agent_id, event.device_id, db)
+
         result = await db.execute(
             select(BaselineDevice).where(
                 BaselineDevice.agent_id == event.agent_id,
@@ -93,11 +110,11 @@ class RiskEngine:
         is_first_ever = baseline_row is None
         is_not_established = baseline_row is None or baseline_row.seen_count < 3
 
-        if is_first_ever:
+        if is_first_ever and not allowlisted:
             score += RULES["new_device"]
             fired.append("new_device")
 
-        if is_not_established:
+        if is_not_established and not allowlisted:
             score += RULES["unknown_device"]
             fired.append("unknown_device")
 

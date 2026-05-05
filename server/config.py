@@ -15,6 +15,23 @@ class ServerConfig(BaseSettings):
     rolling_window_seconds: int = 3600
     host: str = "0.0.0.0"
     port: int = 8443
+    # Notification sinks (comma-separated; supported: email, slack, syslog)
+    notification_sinks: str = ""
+    # Email sink
+    smtp_host: str = "localhost"
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_pass: str = ""
+    smtp_from: str = "alerts@threat-detection.local"
+    smtp_to: str = ""  # comma-separated recipients
+    # Slack sink
+    slack_webhook_url: str = ""
+    # Syslog/SIEM sink
+    syslog_host: str = "localhost"
+    syslog_port: int = 514
+    # Rate limiting
+    rate_limit_requests: int = 200
+    rate_limit_window_seconds: int = 60
 
     model_config = SettingsConfigDict(env_prefix="SERVER_")
 

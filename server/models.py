@@ -90,3 +90,19 @@ class HoneypotProfile(Base):
     pid = Column(String(8), nullable=False)
     name = Column(String(256), nullable=False, default="")
     active = Column(Boolean, nullable=False, default=True)
+
+
+class AllowlistedDevice(Base):
+    """Per-agent or org-wide device allowlist entry.
+
+    If ``agent_id`` is ``"*"`` the entry applies to all agents (org-wide).
+    """
+
+    __tablename__ = "allowlisted_devices"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    # "*" means org-wide; otherwise scoped to a specific agent
+    agent_id = Column(String(128), nullable=False, index=True, default="*")
+    device_id = Column(String(256), nullable=False)
+    note = Column(String(512), nullable=False, default="")
+    created_at = Column(DateTime(timezone=True), nullable=False, default=_now)

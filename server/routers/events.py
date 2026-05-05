@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from server.database import get_db
 from server.honeypot.profiles import HoneypotManager
 from server.models import Alert, Event
+from server.notifications.bus import get_bus
 from server.scoring.baseline import BaselineProfiler
 from server.scoring.risk_engine import RiskEngine
 from shared.schema import NormalizedEvent
@@ -63,6 +64,23 @@ async def create_event(event: NormalizedEvent, db: AsyncSession = Depends(get_db
             }
 
     await db.commit()
+
+    # Dispatch alerts via notification bus (non-blocking; errors are logged)
+    if alert_out is not None:
+        import asyncio
+
+        from server.routers.dashboard import manager as ws_manager
+
+        alert_payload = {
+            **alert_out,
+            "agent_id": event.agent_id,
+            "timestamp": event.timestamp.isoformat(),
+            "details_json": "{}",
+        }
+        bus = get_bus()
+        asyncio.create_task(bus.dispatch(alert_payload))
+        asyncio.create_task(ws_manager.broadcast({"type": "alert", **alert_payload}))
+
     return {"event_id": event.event_id, "score": score, "alert": alert_out}
 
 
