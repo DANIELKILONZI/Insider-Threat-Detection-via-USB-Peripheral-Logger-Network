@@ -13,6 +13,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY --chown=itdn:itdn server/ ./server/
 
+# Migrations ship with the image so managed deployments can run
+# `docker compose exec server alembic upgrade head` instead of relying on the
+# create_all path in init_db().
+COPY --chown=itdn:itdn alembic/ ./alembic/
+COPY --chown=itdn:itdn alembic.ini ./alembic.ini
+
 # Ensure DB and log directories exist and are owned by the service user
 RUN mkdir -p /var/lib/itdn /var/log/itdn \
     && chown -R itdn:itdn /var/lib/itdn /var/log/itdn

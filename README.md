@@ -46,7 +46,7 @@ Splunk, or Elasticsearch within seconds.
 
 | Capability | Detail |
 |---|---|
-| **Cross-platform monitoring** | Linux udev / eBPF, Windows WMI, Bluetooth on both |
+| **Cross-platform monitoring** | Linux udev / eBPF, Windows ETW (WMI fallback), Bluetooth on both |
 | **Tamper-evident logs** | SHA-256 hash-chained JSON-Lines with optional AES-256-GCM encryption |
 | **Remote anchoring** | HMAC-signed chain-head hashes submitted to the server every 5 min |
 | **6 detection rules** | After-hours, unknown device, high-volume, rapid-cycle, cross-host lateral movement, honeypot |
@@ -58,7 +58,7 @@ Splunk, or Elasticsearch within seconds.
 | **SOC dashboard** | Live alert feed, colour-coded risk gauges, anomaly σ column |
 | **SIEM integrations** | Splunk HEC, Elasticsearch Bulk API |
 | **Prometheus metrics** | Scrape-ready `/metrics` endpoint |
-| **116 automated tests** | Unit + full-stack integration, Python 3.11 & 3.12, CodeQL on every PR |
+| **204 automated tests** | Unit + full-stack integration, Python 3.11 & 3.12, CodeQL on every PR |
 
 ---
 
@@ -114,7 +114,7 @@ Located in `agent/`. Runs as a non-root system service on each workstation.
 
 | File | Purpose |
 |------|---------|
-| `agent/monitor/usb_monitor.py` | Real-time USB monitoring via Linux udev (pyudev) or Windows WMI |
+| `agent/monitor/usb_monitor.py` | Real-time USB monitoring; selects Linux udev (pyudev), Windows ETW, or WMI/polling fallback |
 | `agent/monitor/bt_monitor.py` | Bluetooth monitoring via `bluetoothctl` (Linux) or WMI (Windows) |
 | `agent/monitor/ebpf_monitor.py` | Kernel-level USB event capture for Linux kernels with BPF support |
 | `agent/logger.py` | Local tamper-evident JSON-Lines audit log with SHA-256 hash chaining and optional AES-256-GCM encryption |
@@ -152,7 +152,8 @@ or PostgreSQL.
 
 | File | Purpose |
 |------|---------|
-| `server/app.py` | Flask REST API — ingest, alerts, timeline, audit, config, risk, anomaly, attack graph, anchoring, integrity, dashboard, metrics |
+| `server/app.py` | Application factory — registers blueprints, initialises the DB, starts the retention worker |
+| `server/routers/` | Flask blueprints — ingest, alerts, timeline, audit, config, risk, anomaly, attack graph, anchoring, integrity, dashboard, metrics |
 | `server/database.py` | SQLAlchemy 2 persistence (SQLite default; PostgreSQL via `ITDN_DATABASE_URL`) |
 | `server/detection/rules.py` | 6-rule anomaly detection engine |
 | `server/alert_manager.py` | Alert deduplication, persistence, and SIEM forwarding |
@@ -535,7 +536,7 @@ pip install -r requirements.txt
 python -m pytest tests/ -v
 ```
 
-The suite contains **116 tests** covering unit behaviour and full-stack
+The suite contains **204 tests** covering unit behaviour and full-stack
 integration against a real in-memory SQLite database.
 
 ---
@@ -564,32 +565,53 @@ pull request:
 │   ├── logger.py                   # Tamper-evident hash-chained audit log
 │   ├── retry_queue.py              # SQLite-backed persistent retry queue
 │   ├── transport.py                # mTLS event transport with disk-backed retry
-│   ├── usb_monitor.py              # USB event monitor
-│   ├── bt_monitor.py               # Bluetooth event monitor
-│   ├── ebpf_monitor.py             # eBPF-based USB monitor (Linux)
 │   ├── anchor_scheduler.py         # Periodic log-chain anchor submission
 │   ├── integrity.py                # Agent self-integrity checker
-│   └── main.py                     # Agent entry point
+│   ├── main.py                     # Agent entry point
+│   └── monitor/                    # Event sources (callback + start/stop contract)
+│       ├── usb_monitor.py          # USB monitor; selects the per-platform backend
+│       ├── bt_monitor.py           # Bluetooth event monitor
+│       ├── ebpf_monitor.py         # eBPF-based USB monitor (Linux)
+│       └── etw_monitor.py          # Windows ETW backend (preferred over WMI)
 │
 ├── server/                         # Central SIEM server
+│   ├── app.py                      # Application factory — registers blueprints
 │   ├── config.py                   # Pydantic BaseSettings configuration
 │   ├── logging_config.py           # Structured JSON logging
-│   ├── database.py                 # SQLAlchemy 2 (SQLite / PostgreSQL)
+│   ├── database.py                 # SQLAlchemy 2 Core (SQLite / PostgreSQL)
 │   ├── schema.py                   # Pydantic v2 event-batch validation
 │   ├── normalized_event.py         # Canonical event normalisation
-│   ├── rules.py                    # 6-rule anomaly detection engine
-│   ├── rule_config.py              # Runtime-adjustable thresholds
-│   ├── alert_manager.py            # Alert dedup, persistence, and forwarding
-│   ├── risk_scoring.py             # Per-host cumulative risk scoring
-│   ├── anomaly.py                  # Z-score statistical anomaly detector
-│   ├── baseline.py                 # Device baseline tracking
-│   ├── attack_graph.py             # Lateral-movement attack graph builder
-│   ├── honeypot.py                 # Honeypot VID detection
-│   ├── auth.py                     # API key auth + per-IP rate limiting
+│   ├── auth.py                     # API key auth, RBAC, per-IP rate limiting
 │   ├── metrics.py                  # Prometheus-format metrics
-│   ├── splunk_forwarder.py         # Splunk HEC client
-│   ├── es_forwarder.py             # Elasticsearch Bulk API client
-│   ├── app.py                      # Flask REST API (all endpoints)
+│   ├── alert_manager.py            # Alert dedup, persistence, and forwarding
+│   │
+│   ├── routers/                    # HTTP layer — one blueprint per concern
+│   │   ├── events.py               # POST /api/v1/events (ingest)
+│   │   ├── alerts.py               # Alert listing and acknowledgement
+│   │   ├── audit.py                # Audit chain and event timeline
+│   │   ├── anchor.py               # Remote log-chain anchoring
+│   │   ├── analytics.py            # Risk, baseline, anomaly, attack graph, UBA
+│   │   ├── integrity.py            # Agent integrity register / check
+│   │   ├── admin.py                # Runtime config, threat feed, maintenance
+│   │   └── system.py               # Health, metrics, dashboard
+│   │
+│   ├── detection/                  # "Is this suspicious?"
+│   │   ├── rules.py                # 6-rule anomaly detection engine
+│   │   ├── rule_config.py          # Runtime-adjustable thresholds
+│   │   ├── anomaly.py              # Z-score statistical anomaly detector
+│   │   ├── attack_graph.py         # Lateral-movement attack graph builder
+│   │   ├── honeypot.py             # Honeypot VID detection
+│   │   └── threat_feed.py          # Known-bad device identifier feed
+│   │
+│   ├── scoring/                    # "How bad is it?"
+│   │   ├── risk_scoring.py         # Per-host cumulative risk scoring
+│   │   └── baseline.py             # Device baseline tracking
+│   │
+│   ├── notifications/              # "Tell someone"
+│   │   ├── notifiers.py            # Email and Slack delivery
+│   │   ├── splunk_forwarder.py     # Splunk HEC client
+│   │   └── es_forwarder.py         # Elasticsearch Bulk API client
+│   │
 │   └── templates/
 │       └── dashboard.html          # SOC alert dashboard
 │
@@ -597,7 +619,7 @@ pull request:
 │   ├── env.py                      # Targets server.database.metadata
 │   └── versions/                   # Migration history (one file per revision)
 │
-├── tests/                          # 116 unit + integration tests
+├── tests/                          # 204 unit + integration tests
 │   ├── conftest.py
 │   ├── test_api.py
 │   ├── test_rules.py
@@ -617,6 +639,8 @@ pull request:
 │   ├── test_anchoring.py
 │   ├── test_integrity.py
 │   ├── test_normalized_event.py
+│   ├── test_etw_monitor.py         # ETW backend + platform selection
+│   ├── test_migrations.py          # Alembic / metadata drift guard
 │   └── test_integration.py         # Full-stack integration (real SQLite)
 │
 ├── tools/
