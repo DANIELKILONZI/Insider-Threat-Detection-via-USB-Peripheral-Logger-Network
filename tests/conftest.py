@@ -12,8 +12,16 @@ Provides:
 from __future__ import annotations
 
 import importlib
+import os
 
 import pytest
+
+# Anchoring fails closed when the server holds no signing key, so the suite
+# supplies a real one.  Tests therefore exercise the genuine HMAC signing and
+# verification path rather than the ITDN_ALLOW_UNSIGNED_ANCHORS dev fallback;
+# tests/test_anchor_signing.py covers the refusal and dev-mode branches
+# explicitly.  Set at import time so it is present before any module reload.
+os.environ.setdefault("ITDN_ANCHOR_KEY", "test-anchor-signing-key-not-a-real-secret")
 
 
 @pytest.fixture(autouse=True)

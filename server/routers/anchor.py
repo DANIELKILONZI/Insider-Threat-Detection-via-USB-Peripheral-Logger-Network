@@ -12,10 +12,14 @@ GET  /api/v1/anchors?agent_id=…
 
 from __future__ import annotations
 
+import logging
+
 from flask import Blueprint, jsonify, request
 
 import server.database as db
 from server.auth import require_api_key
+
+logger = logging.getLogger(__name__)
 
 anchor_bp = Blueprint("anchor", __name__)
 
@@ -30,7 +34,14 @@ def anchor_chain():
     chain_head_hash = data.get("chain_head_hash", "")
     if not agent_id or not chain_head_hash:
         return jsonify({"error": "agent_id and chain_head_hash required"}), 400
-    sig = db.insert_anchor(agent_id, chain_head_hash)
+    try:
+        sig = db.insert_anchor(agent_id, chain_head_hash)
+    except db.AnchorSigningError as exc:
+        # Misconfiguration, not a bad request: the agent did nothing wrong, and
+        # it must not be told the anchor succeeded. 503 so agents retry once the
+        # server is given a signing key.
+        logger.critical("Anchor rejected – server cannot sign: %s", exc)
+        return jsonify({"error": "Anchoring unavailable: server has no signing key"}), 503
     return jsonify({"ok": True, "signature": sig, "anchored_at": db._utcnow()}), 200
 
 

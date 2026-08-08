@@ -171,11 +171,42 @@ def _build_parser() -> argparse.ArgumentParser:
         "--anchors", action="store_true",
         help="Also display remote log anchors for the hostname (requires --server).",
     )
+    parser.add_argument(
+        "--verify-anchors", action="store_true", dest="verify_anchors",
+        help=(
+            "Check each anchor's server signature and exit non-zero if any fails. "
+            "Implies --anchors. Requires the server's key material "
+            "(ITDN_TLS_CERT or ITDN_ANCHOR_KEY), so normally run on the server."
+        ),
+    )
     return parser
 
 
-def _show_anchors(server_url: str, hostname: str, ca_cert: Optional[str]) -> None:
-    """Fetch and display remote log anchors for hostname."""
+def _anchor_status(chain_head_hash: str, signature: str) -> str:
+    """Describe whether an anchor's signature actually checks out.
+
+    Verification needs the server's key material, so it only works when this
+    tool runs on the server (or with ITDN_TLS_CERT / ITDN_ANCHOR_KEY pointing
+    at it).  A signature that cannot be checked is reported as UNVERIFIED —
+    never as valid.
+    """
+    algorithm = signature.partition(":")[0]
+    if algorithm == "unsigned-dev":
+        return "UNSIGNED (development key – not tamper evidence)"
+    try:
+        from server.database import verify_anchor
+    except Exception:  # pylint: disable=broad-except
+        return "UNVERIFIED (server modules unavailable)"
+    try:
+        return "VALID" if verify_anchor(chain_head_hash, signature) else "INVALID"
+    except Exception as exc:  # pylint: disable=broad-except
+        return f"UNVERIFIED ({exc})"
+
+
+def _show_anchors(
+    server_url: str, hostname: str, ca_cert: Optional[str], verify: bool = False
+) -> int:
+    """Fetch and display remote log anchors; return the count that failed verification."""
     url = f"{server_url.rstrip('/')}/api/v1/anchors?agent_id={hostname}&limit=20"
     ctx = ssl.create_default_context()
     if ca_cert:
@@ -186,16 +217,27 @@ def _show_anchors(server_url: str, hostname: str, ca_cert: Optional[str]) -> Non
             body = json.loads(resp.read())
     except Exception as exc:  # pylint: disable=broad-except
         print(f"\n  WARNING: could not fetch anchors: {exc}", file=sys.stderr)
-        return
+        return 0
     anchors = body.get("anchors", [])
     print(f"\n  Remote anchors for '{hostname}': {len(anchors)} record(s)")
+
+    failures = 0
     for a in anchors[:5]:
-        print(
-            f"    • {a.get('anchored_at', '?')} – hash {a.get('chain_head_hash', '?')[:16]}… "
-            f"sig {a.get('server_signature', '?')[:16]}…"
+        head = a.get("chain_head_hash", "")
+        sig = a.get("server_signature", "")
+        line = (
+            f"    • {a.get('anchored_at', '?')} – hash {head[:16]}… "
+            f"sig {sig[:16]}…"
         )
+        if verify:
+            status = _anchor_status(head, sig)
+            if status != "VALID":
+                failures += 1
+            line += f"  [{status}]"
+        print(line)
     if len(anchors) > 5:
         print(f"    … and {len(anchors) - 5} more")
+    return failures
 
 
 def main() -> None:
@@ -218,32 +260,44 @@ def main() -> None:
 
     print(f"  Records: {len(records)}")
 
+    # An empty chain is trivially valid, but must not short-circuit anchor
+    # checking: a host with no records and forged anchors would otherwise be
+    # reported as clean.
+    errors: List[str] = []
     if not records:
         print("\n  (no records – chain is trivially valid)")
-        sys.exit(0)
-
-    # Verify
-    errors = verify_chain(records)
-
-    print()
-    if errors:
-        print(f"  ✗ CHAIN INTEGRITY FAILURE – {len(errors)} error(s) detected:")
-        for err in errors:
-            print(f"    • {err}")
-        sys.exit(1)
     else:
-        print(f"  ✓ Chain is intact ({len(records)} records verified)")
+        errors = verify_chain(records)
+        print()
+        if errors:
+            print(f"  ✗ CHAIN INTEGRITY FAILURE – {len(errors)} error(s) detected:")
+            for err in errors:
+                print(f"    • {err}")
+        else:
+            print(f"  ✓ Chain is intact ({len(records)} records verified)")
 
     # Show remote anchors if requested
-    if getattr(args, "anchors", False):
+    anchor_failures = 0
+    verify_anchors = getattr(args, "verify_anchors", False)
+    if getattr(args, "anchors", False) or verify_anchors:
         if not args.server or not args.hostname:
             print("\n  WARNING: --anchors requires both --server and --hostname", file=sys.stderr)
         else:
-            _show_anchors(args.server, args.hostname, getattr(args, "ca_cert", None))
+            anchor_failures = _show_anchors(
+                args.server,
+                args.hostname,
+                getattr(args, "ca_cert", None),
+                verify=verify_anchors,
+            )
+            if verify_anchors and anchor_failures:
+                print(
+                    f"\n  ✗ ANCHOR VERIFICATION FAILURE – {anchor_failures} anchor(s) "
+                    f"could not be verified"
+                )
 
-    if not errors:
-        sys.exit(0)
-    sys.exit(1)
+    if errors or anchor_failures:
+        sys.exit(1)
+    sys.exit(0)
 
 
 if __name__ == "__main__":

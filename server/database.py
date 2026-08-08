@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -34,6 +35,8 @@ import sqlalchemy as sa
 from sqlalchemy import text
 
 from server.config import DATABASE_URL
+
+logger = logging.getLogger(__name__)
 
 _GENESIS_HASH = "0" * 64
 _lock = threading.Lock()
@@ -549,48 +552,154 @@ def get_timeline(
 # Remote log anchoring
 # ---------------------------------------------------------------------------
 
-# Process-scoped fallback HMAC key used when neither TLS key nor ITDN_API_KEY
-# is configured (dev/test only).  Generated once per process; not persisted
-# so signatures will differ across restarts.
+# An anchor is the server's counter-signature over an agent's local hash-chain
+# head.  Its only purpose is to be something the *agent cannot produce itself*,
+# so that an agent which later rewrites its own log cannot also rewrite the
+# matching anchor.  Two consequences follow, and both are enforced below:
+#
+#   1. The signing key must be server-private.  ITDN_API_KEY is not — every
+#      agent holds it in order to authenticate, so signing with it would let
+#      any agent forge anchors for its own log.
+#   2. If no server-private key is available the server must refuse to anchor.
+#      Emitting an unverifiable signature is worse than emitting none: the
+#      fleet reports healthy anchoring while producing evidence that can never
+#      be checked.
+#
+# Signatures are stored with an algorithm prefix so verify_anchor() knows how
+# to check them and so the scheme can change without ambiguity.
+
+_SIG_RSA = "rsa-sha256"
+_SIG_HMAC = "hmac-sha256"
+_SIG_UNSIGNED = "unsigned-dev"
+
+# Process-scoped key used only when ITDN_ALLOW_UNSIGNED_ANCHORS is enabled.
+# Deliberately random and never persisted: signatures produced with it cannot
+# be verified, which is what marks them as non-evidence.
 import secrets as _secrets
 _ANCHOR_FALLBACK_KEY: str = _secrets.token_hex(32)
+
+
+class AnchorSigningError(RuntimeError):
+    """Raised when no server-private key is available to sign an anchor."""
 
 
 def _anchor_fallback_key() -> str:
     return _ANCHOR_FALLBACK_KEY
 
 
-def insert_anchor(agent_id: str, chain_head_hash: str) -> str:
-    """Sign chain_head_hash with server's RSA private key (or HMAC fallback) and store anchor."""
+def _sign_chain_head(chain_head_hash: str) -> str:
+    """Return ``"<algorithm>:<signature>"`` for *chain_head_hash*.
+
+    Preference order: the TLS private key (asymmetric, so verification needs
+    only the public cert), then ITDN_ANCHOR_KEY (symmetric, server-held).
+
+    Raises :class:`AnchorSigningError` when neither is configured, unless
+    ITDN_ALLOW_UNSIGNED_ANCHORS is set for development.
+    """
     import hashlib
     import hmac
     import os
-    from server.config import TLS_KEY, API_SECRET_KEY
 
-    sig = ""
-    # Try RSA signing with TLS key
+    from server.config import ALLOW_UNSIGNED_ANCHORS, ANCHOR_KEY, TLS_KEY
+
     if os.path.exists(TLS_KEY):
         try:
             from cryptography.hazmat.primitives import hashes, serialization
             from cryptography.hazmat.primitives.asymmetric import padding
-            with open(TLS_KEY, "rb") as f:
-                private_key = serialization.load_pem_private_key(f.read(), password=None)
-            signature_bytes = private_key.sign(
+
+            with open(TLS_KEY, "rb") as fh:
+                private_key = serialization.load_pem_private_key(fh.read(), password=None)
+            signature = private_key.sign(
                 chain_head_hash.encode(),
                 padding.PKCS1v15(),
                 hashes.SHA256(),
             )
-            sig = signature_bytes.hex()
+            return f"{_SIG_RSA}:{signature.hex()}"
         except Exception:
-            sig = ""
+            # A present-but-unusable TLS key must not silently downgrade the
+            # signature; log it and fall through to the symmetric key.
+            logger.exception("Anchor RSA signing failed with TLS key %s", TLS_KEY)
 
-    # Fallback: HMAC-SHA256 with the configured API key.
-    # When API_SECRET_KEY is not set (dev/test), fall back to a process-scoped
-    # random key so signatures are not predictable, though they will differ
-    # across restarts.  Production deployments must set ITDN_API_KEY.
-    if not sig:
-        mac_key = (API_SECRET_KEY or _anchor_fallback_key()).encode()
-        sig = hmac.new(mac_key, chain_head_hash.encode(), hashlib.sha256).hexdigest()
+    if ANCHOR_KEY:
+        mac = hmac.new(ANCHOR_KEY.encode(), chain_head_hash.encode(), hashlib.sha256)
+        return f"{_SIG_HMAC}:{mac.hexdigest()}"
+
+    if ALLOW_UNSIGNED_ANCHORS:
+        logger.critical(
+            "Anchoring with an UNVERIFIABLE development key: no readable TLS "
+            "private key and no ITDN_ANCHOR_KEY. These anchors are not tamper "
+            "evidence. Never run a production fleet in this mode."
+        )
+        mac = hmac.new(
+            _anchor_fallback_key().encode(), chain_head_hash.encode(), hashlib.sha256
+        )
+        return f"{_SIG_UNSIGNED}:{mac.hexdigest()}"
+
+    raise AnchorSigningError(
+        "Refusing to anchor: no server-private signing key. Provide a readable "
+        "TLS private key (ITDN_TLS_KEY) or set ITDN_ANCHOR_KEY to a secret that "
+        "no agent holds. ITDN_API_KEY is not usable here because every agent "
+        "knows it. Set ITDN_ALLOW_UNSIGNED_ANCHORS=1 only for development."
+    )
+
+
+def verify_anchor(chain_head_hash: str, signature: str) -> bool:
+    """Check a stored anchor signature against *chain_head_hash*.
+
+    Returns False for development ``unsigned-dev`` signatures: they are
+    unverifiable by construction, and reporting them as valid would recreate
+    exactly the false assurance this scheme exists to prevent.
+    """
+    import hashlib
+    import hmac
+    import os
+
+    from server.config import ANCHOR_KEY, TLS_CERT
+
+    algorithm, _, digest = signature.partition(":")
+    if not digest:
+        return False
+
+    if algorithm == _SIG_RSA:
+        if not os.path.exists(TLS_CERT):
+            logger.warning("Cannot verify RSA anchor: no certificate at %s", TLS_CERT)
+            return False
+        try:
+            from cryptography import x509
+            from cryptography.hazmat.primitives import hashes
+            from cryptography.hazmat.primitives.asymmetric import padding
+
+            with open(TLS_CERT, "rb") as fh:
+                public_key = x509.load_pem_x509_certificate(fh.read()).public_key()
+            public_key.verify(
+                bytes.fromhex(digest),
+                chain_head_hash.encode(),
+                padding.PKCS1v15(),
+                hashes.SHA256(),
+            )
+            return True
+        except Exception:
+            return False
+
+    if algorithm == _SIG_HMAC:
+        if not ANCHOR_KEY:
+            return False
+        expected = hmac.new(
+            ANCHOR_KEY.encode(), chain_head_hash.encode(), hashlib.sha256
+        ).hexdigest()
+        return hmac.compare_digest(expected, digest)
+
+    return False
+
+
+def insert_anchor(agent_id: str, chain_head_hash: str) -> str:
+    """Counter-sign *chain_head_hash* and store the anchor.
+
+    Raises :class:`AnchorSigningError` when the server has no key it can sign
+    with; callers should surface that as a server-side failure rather than
+    recording an anchor that carries no evidential weight.
+    """
+    sig = _sign_chain_head(chain_head_hash)
 
     now = _utcnow()
     with _lock:

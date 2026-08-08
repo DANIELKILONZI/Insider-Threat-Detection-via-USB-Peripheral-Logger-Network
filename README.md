@@ -48,7 +48,7 @@ Splunk, or Elasticsearch within seconds.
 |---|---|
 | **Cross-platform monitoring** | Linux udev / eBPF, Windows ETW (WMI fallback), Bluetooth on both |
 | **Tamper-evident logs** | SHA-256 hash-chained JSON-Lines with optional AES-256-GCM encryption |
-| **Remote anchoring** | HMAC-signed chain-head hashes submitted to the server every 5 min |
+| **Remote anchoring** | Chain heads counter-signed by the server (RSA, or server-only HMAC) every 5 min; fails closed and is independently verifiable |
 | **6 detection rules** | After-hours, unknown device, high-volume, rapid-cycle, cross-host lateral movement, honeypot |
 | **Risk scoring** | Per-host cumulative score weighted by alert severity |
 | **Statistical anomaly detection** | Z-score over rolling hourly event windows |
@@ -58,7 +58,7 @@ Splunk, or Elasticsearch within seconds.
 | **SOC dashboard** | Live alert feed, colour-coded risk gauges, anomaly σ column |
 | **SIEM integrations** | Splunk HEC, Elasticsearch Bulk API |
 | **Prometheus metrics** | Scrape-ready `/metrics` endpoint |
-| **204 automated tests** | Unit + full-stack integration, Python 3.11 & 3.12, CodeQL on every PR |
+| **221 automated tests** | Unit + full-stack integration, Python 3.11 & 3.12, CodeQL on every PR |
 
 ---
 
@@ -247,14 +247,42 @@ Exit codes: `0` = intact, `1` = tamper/gap detected, `2` = usage or connectivity
 ### Remote Log Anchoring
 
 Every `ITDN_ANCHOR_INTERVAL` seconds (default 300 s) the agent computes an
-HMAC-SHA256 of its current chain-head hash and `POST`s it to
-`/api/v1/anchor`. The server countersigns with `ITDN_API_KEY` and stores the
-anchor.
+HMAC-SHA256 of its current chain-head hash and `POST`s it to `/api/v1/anchor`.
+The server counter-signs it and stores the anchor.
 
-A SOC analyst can retrieve anchors with `GET /api/v1/anchors?agent_id=<hostname>`
-or pass `--anchors` to `tools/verify_chain.py` to display them alongside the
-chain verification output. This detects offline log tampering even when an
-agent was temporarily isolated from the network.
+The anchor is only evidence if the agent could not have produced it itself —
+otherwise an agent that rewrites its local log could rewrite the matching
+anchor too. Two rules follow from that, and both are enforced:
+
+**The signing key must be server-private.** In preference order the server uses
+the TLS private key at `ITDN_TLS_KEY` (RSA-SHA256, verifiable with the public
+certificate), then `ITDN_ANCHOR_KEY` (HMAC-SHA256, server-held). `ITDN_API_KEY`
+is deliberately *not* accepted: every agent holds it in order to authenticate,
+so signing with it would let any agent forge anchors for its own log.
+
+**No key means no anchor.** If neither is available the server returns
+`503 Anchoring unavailable` instead of storing an unverifiable signature. A
+fleet reporting healthy anchoring while producing uncheckable evidence is worse
+than one that reports the failure. For local development,
+`ITDN_ALLOW_UNSIGNED_ANCHORS=1` accepts anchors signed with a random
+process-scoped key; these are stored with an `unsigned-dev:` prefix and always
+report as unverified.
+
+Signatures are stored as `<algorithm>:<hex>` so they stay checkable as the
+scheme evolves.
+
+A SOC analyst can retrieve anchors with `GET /api/v1/anchors?agent_id=<hostname>`,
+pass `--anchors` to `tools/verify_chain.py` to display them, or `--verify-anchors`
+to actually check each signature and exit non-zero on any failure:
+
+```bash
+# Run on the server, where the key material lives
+python -m tools.verify_chain --server https://siem.internal:8443 \
+    --hostname ws-classified-042 --verify-anchors
+```
+
+This detects offline log tampering even when an agent was temporarily isolated
+from the network.
 
 ---
 
@@ -478,7 +506,9 @@ ansible-playbook deploy/ansible/deploy_agent.yml -i inventory.ini
 | `ITDN_DATABASE_URL` | _(SQLite at DB_PATH)_ | Full SQLAlchemy URL; override for PostgreSQL |
 | `ITDN_SERVER_HOST` | `0.0.0.0` | Bind address |
 | `ITDN_SERVER_PORT` | `8443` | Bind port |
-| `ITDN_API_KEY` | _(empty)_ | Bearer token for authenticated endpoints and anchor signing; empty = auth disabled |
+| `ITDN_API_KEY` | _(empty)_ | Bearer token for authenticated endpoints; empty = auth disabled. Not used for anchor signing |
+| `ITDN_ANCHOR_KEY` | _(empty)_ | Server-only secret for HMAC anchor signing, used when no TLS private key is readable. Must be a value no agent holds |
+| `ITDN_ALLOW_UNSIGNED_ANCHORS` | `false` | Dev only. Accept unverifiable anchors instead of returning 503 when no signing key exists |
 | `ITDN_RATE_LIMIT_MAX` | `200` | Max requests per IP per window |
 | `ITDN_RATE_LIMIT_WINDOW_SECS` | `60` | Rate-limit window in seconds |
 | `ITDN_AFTER_HOURS_START` | `22` | After-hours window start (hour 0–23) |
@@ -536,7 +566,7 @@ pip install -r requirements.txt
 python -m pytest tests/ -v
 ```
 
-The suite contains **204 tests** covering unit behaviour and full-stack
+The suite contains **221 tests** covering unit behaviour and full-stack
 integration against a real in-memory SQLite database.
 
 ---
@@ -619,7 +649,7 @@ pull request:
 │   ├── env.py                      # Targets server.database.metadata
 │   └── versions/                   # Migration history (one file per revision)
 │
-├── tests/                          # 204 unit + integration tests
+├── tests/                          # 221 unit + integration tests
 │   ├── conftest.py
 │   ├── test_api.py
 │   ├── test_rules.py
@@ -640,6 +670,7 @@ pull request:
 │   ├── test_integrity.py
 │   ├── test_normalized_event.py
 │   ├── test_etw_monitor.py         # ETW backend + platform selection
+│   ├── test_anchor_signing.py      # Anchor fail-closed + signature verification
 │   ├── test_migrations.py          # Alembic / metadata drift guard
 │   └── test_integration.py         # Full-stack integration (real SQLite)
 │

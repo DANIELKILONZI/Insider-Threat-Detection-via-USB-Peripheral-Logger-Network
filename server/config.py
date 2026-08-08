@@ -51,6 +51,17 @@ class _ServerSettings(BaseSettings):
     ITDN_RAPID_CYCLE_WINDOW_SECS: int = Field(default=300, gt=0)
     ITDN_ALERT_DEDUP_SECS: int = Field(default=3600, gt=0)
 
+    # ── Log anchoring ─────────────────────────────────────────────────────────
+    # Server-held secret used to counter-sign agent chain heads when no TLS
+    # private key is available.  This must NOT be a value any agent knows:
+    # the whole point of an anchor is that an agent cannot forge one for its
+    # own log.  ITDN_API_KEY is explicitly unsuitable — every agent has it.
+    ITDN_ANCHOR_KEY: str = Field(default="")
+    # Escape hatch for development only.  When true, anchoring falls back to a
+    # random process-scoped key that cannot be verified and does not survive a
+    # restart.  Never enable this in a deployment that needs tamper evidence.
+    ITDN_ALLOW_UNSIGNED_ANCHORS: bool = Field(default=False)
+
     # ── API security ──────────────────────────────────────────────────────────
     ITDN_API_KEY: str = Field(default="")
     # RBAC: JSON map of "key" -> "role" where role is admin|analyst|readonly.
@@ -110,6 +121,9 @@ VOLUME_THRESHOLD_BYTES: int = _s.ITDN_VOLUME_THRESHOLD_BYTES
 RAPID_CYCLE_COUNT: int = _s.ITDN_RAPID_CYCLE_COUNT
 RAPID_CYCLE_WINDOW_SECS: int = _s.ITDN_RAPID_CYCLE_WINDOW_SECS
 ALERT_DEDUP_WINDOW_SECS: int = _s.ITDN_ALERT_DEDUP_SECS
+
+ANCHOR_KEY: str = _s.ITDN_ANCHOR_KEY
+ALLOW_UNSIGNED_ANCHORS: bool = _s.ITDN_ALLOW_UNSIGNED_ANCHORS
 
 API_SECRET_KEY: str = _s.ITDN_API_KEY
 API_KEYS: str = _s.ITDN_API_KEYS
