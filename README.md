@@ -388,6 +388,39 @@ POSTGRES_PASSWORD=changeme
 ./deploy/gen_certs.sh agent-ws001 agent-ws002 agent-laptop01
 ```
 
+### Database Migrations
+
+ITDN can provision its schema two ways.
+
+`init_db()` runs `metadata.create_all()` on every server start. It is the fast
+path used by tests and single-server installs, and it needs no extra steps.
+
+Managed deployments should use Alembic instead, so schema changes are versioned
+and reviewable:
+
+```bash
+# Apply all pending migrations (reads ITDN_DATABASE_URL, else the SQLite path)
+alembic upgrade head
+
+# Target a specific database for a one-off run
+alembic -x db_url=postgresql+psycopg2://itdn:pw@db:5432/itdn upgrade head
+
+# Preview the SQL without connecting
+alembic upgrade head --sql
+```
+
+The two paths are kept equivalent: a database created by `init_db()` is stamped
+at the head revision, so a later `alembic upgrade head` is a no-op rather than
+an attempt to re-create existing tables. `tests/test_migrations.py` fails the
+build if the migration history and `server/database.py` ever drift apart.
+
+After changing a table or index in `server/database.py`, generate the matching
+migration and commit it alongside the code change:
+
+```bash
+alembic revision --autogenerate -m "describe the change"
+```
+
 ### Server — systemd service
 
 ```ini
@@ -559,6 +592,10 @@ pull request:
 │   ├── app.py                      # Flask REST API (all endpoints)
 │   └── templates/
 │       └── dashboard.html          # SOC alert dashboard
+│
+├── alembic/                        # Versioned schema migrations
+│   ├── env.py                      # Targets server.database.metadata
+│   └── versions/                   # Migration history (one file per revision)
 │
 ├── tests/                          # 116 unit + integration tests
 │   ├── conftest.py

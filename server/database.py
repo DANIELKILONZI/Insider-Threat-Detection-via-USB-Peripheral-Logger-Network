@@ -27,6 +27,7 @@ import hashlib
 import json
 import threading
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import sqlalchemy as sa
@@ -79,6 +80,11 @@ def _get_engine() -> sa.Engine:
 # ── Schema definition ─────────────────────────────────────────────────────────
 
 _metadata = sa.MetaData()
+
+#: Public alias for the Core metadata.  Alembic's ``env.py`` uses this as its
+#: ``target_metadata``; keeping a non-underscore name means migrations do not
+#: reach into a private attribute.
+metadata = _metadata
 
 _events_tbl = sa.Table(
     "events",
@@ -186,24 +192,68 @@ _host_timezone_tbl = sa.Table(
 )
 
 
+# Query indexes are declared as part of the metadata (rather than issued as raw
+# CREATE INDEX statements) so that create_all() and Alembic autogenerate both
+# see them.  Otherwise a database provisioned by `alembic upgrade head` would
+# silently come up without them.
+sa.Index("idx_events_hostname", _events_tbl.c.hostname)
+sa.Index("idx_events_device_id", _events_tbl.c.device_id)
+sa.Index("idx_events_received_at", _events_tbl.c.received_at)
+sa.Index("idx_alerts_hostname", _alerts_tbl.c.hostname)
+sa.Index("idx_alerts_rule_name", _alerts_tbl.c.rule_name)
+sa.Index("idx_alerts_created_at", _alerts_tbl.c.created_at)
+
+
 def init_db() -> None:
-    """Create tables and indexes if they don't exist.  Safe to call every startup."""
+    """Create tables and indexes if they don't exist.  Safe to call every startup.
+
+    This is the fast path used by tests and single-server deployments.  Managed
+    deployments should instead run ``alembic upgrade head``; see ``alembic/``.
+    A database created here is stamped at the head revision so that a later
+    ``alembic upgrade`` does not try to re-create existing tables.
+    """
     engine = _get_engine()
     _metadata.create_all(engine, checkfirst=True)
+    _stamp_alembic_head(engine)
 
-    with engine.begin() as conn:
-        for idx_sql in [
-            "CREATE INDEX IF NOT EXISTS idx_events_hostname    ON events(hostname)",
-            "CREATE INDEX IF NOT EXISTS idx_events_device_id   ON events(device_id)",
-            "CREATE INDEX IF NOT EXISTS idx_events_received_at ON events(received_at)",
-            "CREATE INDEX IF NOT EXISTS idx_alerts_hostname    ON alerts(hostname)",
-            "CREATE INDEX IF NOT EXISTS idx_alerts_rule_name   ON alerts(rule_name)",
-            "CREATE INDEX IF NOT EXISTS idx_alerts_created_at  ON alerts(created_at)",
-        ]:
-            try:
-                conn.execute(text(idx_sql))
-            except Exception:  # pylint: disable=broad-except
-                pass  # index may already exist (PostgreSQL raises, SQLite handles IF NOT EXISTS)
+
+def _stamp_alembic_head(engine: sa.Engine) -> None:
+    """Mark a ``create_all``-provisioned database as being at the head revision.
+
+    Without this, a database created by :func:`init_db` would look like a
+    pre-Alembic database, and a subsequent ``alembic upgrade head`` would try to
+    create tables that already exist.
+
+    Best-effort by design: it is a no-op when Alembic is not installed, when the
+    migration directory is missing, or when the database already carries a
+    revision (in which case it is under migration control already and stamping
+    would corrupt its history).
+    """
+    try:
+        from alembic.config import Config
+        from alembic.runtime.migration import MigrationContext
+        from alembic.script import ScriptDirectory
+    except ImportError:
+        return  # alembic is an optional dependency for the create_all path
+
+    ini_path = Path(__file__).resolve().parent.parent / "alembic.ini"
+    if not ini_path.is_file():
+        return
+
+    try:
+        script = ScriptDirectory.from_config(Config(str(ini_path)))
+        head = script.get_current_head()
+        if head is None:
+            return
+        with engine.begin() as conn:
+            ctx = MigrationContext.configure(conn)
+            if ctx.get_current_revision() is not None:
+                return
+            ctx.stamp(script, "head")
+    except Exception:  # pylint: disable=broad-except
+        # Stamping is a convenience, never a correctness requirement for the
+        # create_all path — a failure here must not stop the server booting.
+        pass
 
 
 # ---------------------------------------------------------------------------
