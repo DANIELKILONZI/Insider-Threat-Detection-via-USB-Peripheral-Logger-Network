@@ -1,5 +1,5 @@
 """
-agent/ebpf_monitor.py – eBPF-based USB monitor using BCC (BPF Compiler Collection).
+agent/monitor/ebpf_monitor.py – eBPF-based USB monitor using BCC (BPF Compiler Collection).
 
 Falls back to udev monitoring if BCC is unavailable.
 """
@@ -68,7 +68,7 @@ class EBPFUSBMonitor:
                 name="ebpf-usb-monitor",
             )
         else:
-            from agent.usb_monitor import _udev_monitor_loop
+            from agent.monitor.usb_monitor import _udev_monitor_loop
             self._thread = threading.Thread(
                 target=_udev_monitor_loop,
                 args=(self._callback, self._stop),
@@ -120,5 +120,5 @@ class EBPFUSBMonitor:
                     break
         except Exception as exc:  # pylint: disable=broad-except
             logger.warning("eBPF loop failed: %s – falling back to udev", exc)
-            from agent.usb_monitor import _udev_monitor_loop
+            from agent.monitor.usb_monitor import _udev_monitor_loop
             _udev_monitor_loop(callback, stop_event)

@@ -1,5 +1,5 @@
 """
-agent/usb_monitor.py – Cross-platform USB device event monitor.
+agent/monitor/usb_monitor.py – Cross-platform USB device event monitor.
 
 On Linux the monitor uses the *pyudev* library to listen for kernel udev
 events in real-time (zero polling latency).  On all other platforms it falls
@@ -305,6 +305,34 @@ def _poll_monitor_loop(callback: EventCallback, stop_event: threading.Event) -> 
 
 
 # ---------------------------------------------------------------------------
+# Backend selection
+# ---------------------------------------------------------------------------
+
+def _select_backend() -> Callable[[EventCallback, threading.Event], None]:
+    """Pick the best available event source for this host.
+
+    Linux prefers udev.  Windows prefers ETW, which reports kernel PnP
+    notifications as they happen; WMI has to re-enumerate the device tree per
+    event and can miss a device that is plugged and unplugged between polls.
+    Everything else falls back to snapshot polling.
+
+    ``etw_monitor_loop`` degrades to the WMI loop by itself when no ETW library
+    is installed, so this only has to decide whether ETW is worth attempting.
+    """
+    system = platform.system()
+    if system == "Linux":
+        return _udev_monitor_loop
+    if system == "Windows":
+        from agent.monitor.etw_monitor import etw_monitor_loop, is_available
+
+        if is_available():
+            return etw_monitor_loop
+        logger.info("ETW unavailable; using the WMI USB monitor")
+        return _wmi_event_monitor_loop
+    return _poll_monitor_loop
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -329,13 +357,7 @@ class USBMonitor:
         if self._thread and self._thread.is_alive():
             return
         self._stop.clear()
-        system = platform.system()
-        if system == "Linux":
-            target = _udev_monitor_loop
-        elif system == "Windows":
-            target = _wmi_event_monitor_loop
-        else:
-            target = _poll_monitor_loop
+        target = _select_backend()
         self._thread = threading.Thread(
             target=target,
             args=(self._callback, self._stop),

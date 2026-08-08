@@ -114,9 +114,9 @@ Located in `agent/`. Runs as a non-root system service on each workstation.
 
 | File | Purpose |
 |------|---------|
-| `agent/usb_monitor.py` | Real-time USB monitoring via Linux udev (pyudev) or Windows WMI |
-| `agent/bt_monitor.py` | Bluetooth monitoring via `bluetoothctl` (Linux) or WMI (Windows) |
-| `agent/ebpf_monitor.py` | Kernel-level USB event capture for Linux kernels with BPF support |
+| `agent/monitor/usb_monitor.py` | Real-time USB monitoring via Linux udev (pyudev) or Windows WMI |
+| `agent/monitor/bt_monitor.py` | Bluetooth monitoring via `bluetoothctl` (Linux) or WMI (Windows) |
+| `agent/monitor/ebpf_monitor.py` | Kernel-level USB event capture for Linux kernels with BPF support |
 | `agent/logger.py` | Local tamper-evident JSON-Lines audit log with SHA-256 hash chaining and optional AES-256-GCM encryption |
 | `agent/crypto.py` | AES-256-GCM encrypt/decrypt helpers |
 | `agent/retry_queue.py` | SQLite-backed persistent retry queue — events survive restarts and network outages |

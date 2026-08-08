@@ -1,12 +1,12 @@
 """
-agent/bt_monitor.py – Bluetooth device event monitor.
+agent/monitor/bt_monitor.py – Bluetooth device event monitor.
 
 Detects nearby / newly-paired Bluetooth devices by polling *bluetoothctl* (on
 Linux) or the Windows Bluetooth APIs (via WMI) at a configurable interval.
 Paired devices that weren't present in the previous snapshot trigger a
 "connected" event; devices that disappear trigger a "disconnected" event.
 
-Event schema matches agent/usb_monitor.py so both sources can be handled by
+Event schema matches agent/monitor/usb_monitor.py so both sources can be handled by
 the same downstream pipeline.
 """
 

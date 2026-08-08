@@ -24,7 +24,7 @@ def main() -> None:
     from agent.config import BT_MONITOR_ENABLED, HOSTNAME
     from agent.logger import LocalAuditLogger
     from agent.transport import EventTransport
-    from agent.usb_monitor import USBMonitor
+    from agent.monitor.usb_monitor import USBMonitor
 
     audit_logger = LocalAuditLogger()
     transport = EventTransport()
@@ -41,7 +41,7 @@ def main() -> None:
     monitors.append(usb_monitor)
 
     if BT_MONITOR_ENABLED:
-        from agent.bt_monitor import BTMonitor
+        from agent.monitor.bt_monitor import BTMonitor
 
         bt_monitor = BTMonitor(callback=handle_event)
         monitors.append(bt_monitor)
