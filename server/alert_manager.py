@@ -12,12 +12,12 @@ import logging
 from typing import Any, Dict
 
 import server.database as db
-import server.es_forwarder as es
-import server.splunk_forwarder as splunk
+import server.notifications.es_forwarder as es
+import server.notifications.splunk_forwarder as splunk
 from server.config import ALERT_DEDUP_WINDOW_SECS
 from server.metrics import METRICS
-from server.notifiers import notify
-from server.rules import Alert
+from server.notifications.notifiers import notify
+from server.detection.rules import Alert
 
 logger = logging.getLogger(__name__)
 

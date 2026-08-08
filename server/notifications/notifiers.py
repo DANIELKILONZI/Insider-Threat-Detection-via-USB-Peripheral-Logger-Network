@@ -1,5 +1,5 @@
 """
-server/notifiers.py – Out-of-band alert notification channels.
+server/notifications/notifiers.py – Out-of-band alert notification channels.
 
 Supports two notification sinks:
 

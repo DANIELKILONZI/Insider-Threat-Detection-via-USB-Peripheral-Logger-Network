@@ -37,7 +37,7 @@ def _make_event(ts, hostname="ws-tz"):
 
 
 def _get_rules():
-    import server.rules as rules_mod
+    import server.detection.rules as rules_mod
     importlib.reload(rules_mod)
     return rules_mod
 

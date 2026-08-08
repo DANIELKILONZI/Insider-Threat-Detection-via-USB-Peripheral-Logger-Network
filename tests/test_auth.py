@@ -52,9 +52,9 @@ class TestApiKeyAuth:
         importlib.reload(cfg)
         import server.database as database
         importlib.reload(database)
-        import server.rule_config as rc
+        import server.detection.rule_config as rc
         importlib.reload(rc)
-        import server.rules as rules_mod
+        import server.detection.rules as rules_mod
         importlib.reload(rules_mod)
         import server.auth as auth_mod
         importlib.reload(auth_mod)
@@ -112,9 +112,9 @@ class TestRateLimit:
         importlib.reload(cfg)
         import server.database as database
         importlib.reload(database)
-        import server.rule_config as rc
+        import server.detection.rule_config as rc
         importlib.reload(rc)
-        import server.rules as rules_mod
+        import server.detection.rules as rules_mod
         importlib.reload(rules_mod)
         import server.auth as auth_mod
         importlib.reload(auth_mod)

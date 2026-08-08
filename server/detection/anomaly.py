@@ -1,5 +1,5 @@
 """
-server/anomaly.py – ML-based anomaly detection for ITDN events.
+server/detection/anomaly.py – ML-based anomaly detection for ITDN events.
 
 Uses sklearn IsolationForest when available; falls back to z-score statistics.
 """

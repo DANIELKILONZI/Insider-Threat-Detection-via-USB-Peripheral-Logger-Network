@@ -1,5 +1,5 @@
 """
-server/risk_scoring.py – Cumulative risk scoring engine for ITDN.
+server/scoring/risk_scoring.py – Cumulative risk scoring engine for ITDN.
 """
 
 from __future__ import annotations

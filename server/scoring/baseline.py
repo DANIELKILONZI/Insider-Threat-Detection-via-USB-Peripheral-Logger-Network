@@ -1,5 +1,5 @@
 """
-server/baseline.py – Device baseline profiling for ITDN.
+server/scoring/baseline.py – Device baseline profiling for ITDN.
 """
 
 from __future__ import annotations

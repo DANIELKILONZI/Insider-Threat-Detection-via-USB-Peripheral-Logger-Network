@@ -1,5 +1,5 @@
 """
-server/rule_config.py – Runtime-adjustable anomaly detection thresholds.
+server/detection/rule_config.py – Runtime-adjustable anomaly detection thresholds.
 
 At startup the store is initialised from environment variables (via
 ``server.config``).  SOC operators can then adjust thresholds live through
@@ -11,7 +11,7 @@ Docker / systemd configuration.
 
 Usage::
 
-    from server.rule_config import get_config, update_config
+    from server.detection.rule_config import get_config, update_config
 
     cfg = get_config()
     new_cfg, errors = update_config({"rapid_cycle_count": 3})

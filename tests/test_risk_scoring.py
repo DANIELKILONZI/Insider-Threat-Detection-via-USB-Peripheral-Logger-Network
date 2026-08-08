@@ -1,7 +1,7 @@
 """Tests for risk scoring engine."""
 from __future__ import annotations
 from unittest.mock import MagicMock
-from server.risk_scoring import RiskScorer, RULE_WEIGHTS
+from server.scoring.risk_scoring import RiskScorer, RULE_WEIGHTS
 
 
 def _mock_alert(rule_name):

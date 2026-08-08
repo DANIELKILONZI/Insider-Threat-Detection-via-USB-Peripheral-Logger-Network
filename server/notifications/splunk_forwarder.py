@@ -1,5 +1,5 @@
 """
-server/splunk_forwarder.py – Push events and alerts to Splunk via HEC.
+server/notifications/splunk_forwarder.py – Push events and alerts to Splunk via HEC.
 
 The Splunk HTTP Event Collector (HEC) endpoint accepts JSON payloads over
 HTTPS.  This module sends each event/alert as a separate HEC record so they
@@ -8,7 +8,7 @@ searches.
 
 Usage::
 
-    from server.splunk_forwarder import forward_event, forward_alert
+    from server.notifications.splunk_forwarder import forward_event, forward_alert
     forward_event(event_dict)
     forward_alert(alert_dict)
 """

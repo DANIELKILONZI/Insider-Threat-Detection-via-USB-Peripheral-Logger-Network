@@ -1,5 +1,5 @@
 """
-server/es_forwarder.py – Forward events and alerts to Elasticsearch.
+server/notifications/es_forwarder.py – Forward events and alerts to Elasticsearch.
 
 Uses the Elasticsearch Bulk API directly over HTTPS (no external client
 library required – only the Python standard library).  This mirrors the
@@ -18,7 +18,7 @@ Configuration (environment variables)
 
 Usage::
 
-    from server.es_forwarder import forward_event, forward_alert
+    from server.notifications.es_forwarder import forward_event, forward_alert
     forward_event(event_dict)
     forward_alert(alert_dict)
 """

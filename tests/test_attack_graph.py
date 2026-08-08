@@ -1,7 +1,7 @@
 """Tests for attack graph builder."""
 from __future__ import annotations
 from unittest.mock import MagicMock
-from server.attack_graph import build_attack_graph, detect_exfil_pattern
+from server.detection.attack_graph import build_attack_graph, detect_exfil_pattern
 
 
 def _make_mock_db(events=None, alerts=None):

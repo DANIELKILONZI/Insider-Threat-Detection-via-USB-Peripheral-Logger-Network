@@ -117,7 +117,7 @@ def test_uba_baseline_populated_after_event(uba_client):
 
 def test_rule_user_unknown_device_fires_on_new_device():
     import importlib
-    import server.rules as rules_mod
+    import server.detection.rules as rules_mod
     importlib.reload(rules_mod)
 
     class _MockDB:
@@ -141,7 +141,7 @@ def test_rule_user_unknown_device_fires_on_new_device():
 
 def test_rule_user_unknown_device_no_fire_without_user():
     import importlib
-    import server.rules as rules_mod
+    import server.detection.rules as rules_mod
     importlib.reload(rules_mod)
 
     class _MockDB:
@@ -164,7 +164,7 @@ def test_rule_user_unknown_device_no_fire_without_user():
 
 def test_rule_user_unknown_device_no_fire_on_known_device():
     import importlib
-    import server.rules as rules_mod
+    import server.detection.rules as rules_mod
     importlib.reload(rules_mod)
 
     class _MockDB:

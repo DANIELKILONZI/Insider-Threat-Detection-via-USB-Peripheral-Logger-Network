@@ -1,7 +1,7 @@
 """Tests for device baseline profiler."""
 from __future__ import annotations
 from unittest.mock import MagicMock
-from server.baseline import BaselineProfiler
+from server.scoring.baseline import BaselineProfiler
 
 
 def test_is_known_false_when_empty():

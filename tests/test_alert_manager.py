@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, call, patch
 
 import pytest
 
-from server.rules import Alert
+from server.detection.rules import Alert
 
 
 # ---------------------------------------------------------------------------

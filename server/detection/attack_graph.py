@@ -1,5 +1,5 @@
 """
-server/attack_graph.py – Attack graph builder for ITDN incident visualization.
+server/detection/attack_graph.py – Attack graph builder for ITDN incident visualization.
 """
 
 from __future__ import annotations

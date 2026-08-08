@@ -154,20 +154,20 @@ or PostgreSQL.
 |------|---------|
 | `server/app.py` | Flask REST API — ingest, alerts, timeline, audit, config, risk, anomaly, attack graph, anchoring, integrity, dashboard, metrics |
 | `server/database.py` | SQLAlchemy 2 persistence (SQLite default; PostgreSQL via `ITDN_DATABASE_URL`) |
-| `server/rules.py` | 6-rule anomaly detection engine |
+| `server/detection/rules.py` | 6-rule anomaly detection engine |
 | `server/alert_manager.py` | Alert deduplication, persistence, and SIEM forwarding |
-| `server/risk_scoring.py` | Per-host cumulative risk score weighted by alert severity |
-| `server/anomaly.py` | Z-score statistical anomaly detector over rolling hourly windows |
-| `server/baseline.py` | First-seen / last-seen device baseline per host |
-| `server/attack_graph.py` | Lateral-movement attack graph builder and pattern detector |
-| `server/honeypot.py` | Honeypot device detection against `ITDN_HONEYPOT_VIDS` |
+| `server/scoring/risk_scoring.py` | Per-host cumulative risk score weighted by alert severity |
+| `server/detection/anomaly.py` | Z-score statistical anomaly detector over rolling hourly windows |
+| `server/scoring/baseline.py` | First-seen / last-seen device baseline per host |
+| `server/detection/attack_graph.py` | Lateral-movement attack graph builder and pattern detector |
+| `server/detection/honeypot.py` | Honeypot device detection against `ITDN_HONEYPOT_VIDS` |
 | `server/normalized_event.py` | Canonical event normalisation shared by rules and scoring |
 | `server/schema.py` | Pydantic v2 input validation for event batches |
 | `server/auth.py` | Bearer-token API authentication + per-IP rate limiting |
-| `server/rule_config.py` | Runtime-adjustable detection thresholds |
+| `server/detection/rule_config.py` | Runtime-adjustable detection thresholds |
 | `server/metrics.py` | In-process Prometheus-format metrics |
-| `server/splunk_forwarder.py` | Splunk HTTP Event Collector (HEC) client |
-| `server/es_forwarder.py` | Elasticsearch Bulk API client |
+| `server/notifications/splunk_forwarder.py` | Splunk HTTP Event Collector (HEC) client |
+| `server/notifications/es_forwarder.py` | Elasticsearch Bulk API client |
 | `server/logging_config.py` | Structured JSON logging |
 | `server/config.py` | All settings via environment variables (Pydantic BaseSettings) |
 | `server/templates/dashboard.html` | SOC alert dashboard with risk gauges and anomaly indicators |
@@ -316,7 +316,7 @@ Example saved searches and the `itdn` index definition live in
 
 ### Elasticsearch Integration
 
-An optional ELK sink (`server/es_forwarder.py`) indexes events and alerts to an
+An optional ELK sink (`server/notifications/es_forwarder.py`) indexes events and alerts to an
 Elasticsearch cluster using the Document API (no extra Python package needed).
 
 | Variable | Purpose |

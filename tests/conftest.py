@@ -19,7 +19,7 @@ import pytest
 @pytest.fixture(autouse=True)
 def reset_rule_config():
     """Reset rule_config thresholds to defaults before and after every test."""
-    import server.rule_config as rc
+    import server.detection.rule_config as rc
     rc.reset_to_defaults()
     yield
     rc.reset_to_defaults()
@@ -41,10 +41,10 @@ def full_client(tmp_path, monkeypatch):
     import server.database as database
     importlib.reload(database)
 
-    import server.rule_config as rc
+    import server.detection.rule_config as rc
     importlib.reload(rc)
 
-    import server.rules as rules_mod
+    import server.detection.rules as rules_mod
     importlib.reload(rules_mod)
 
     import server.auth as auth_mod

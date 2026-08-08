@@ -15,49 +15,49 @@ class TestRuleConfigModule:
     @pytest.fixture(autouse=True)
     def reset_config(self):
         """Reset rule_config to defaults before each test (in addition to conftest autouse)."""
-        import server.rule_config as rc
+        import server.detection.rule_config as rc
         rc.reset_to_defaults()
         yield
         rc.reset_to_defaults()
 
     def test_get_config_returns_defaults(self):
-        from server.rule_config import get_config
+        from server.detection.rule_config import get_config
         cfg = get_config()
         assert cfg["after_hours_start"] == 22
         assert cfg["after_hours_end"] == 6
         assert cfg["rapid_cycle_count"] == 5
 
     def test_update_valid_key(self):
-        from server.rule_config import get_config, update_config
+        from server.detection.rule_config import get_config, update_config
         new_cfg, errors = update_config({"rapid_cycle_count": 3})
         assert not errors
         assert new_cfg["rapid_cycle_count"] == 3
         assert get_config()["rapid_cycle_count"] == 3
 
     def test_update_unknown_key_returns_error(self):
-        from server.rule_config import update_config
+        from server.detection.rule_config import update_config
         _, errors = update_config({"nonexistent_key": 10})
         assert errors
         assert any("Unknown" in e for e in errors)
 
     def test_update_non_integer_returns_error(self):
-        from server.rule_config import update_config
+        from server.detection.rule_config import update_config
         _, errors = update_config({"rapid_cycle_count": "five"})
         assert errors
 
     def test_update_bool_rejected(self):
         """Booleans are ints in Python; ensure they are rejected."""
-        from server.rule_config import update_config
+        from server.detection.rule_config import update_config
         _, errors = update_config({"rapid_cycle_count": True})
         assert errors
 
     def test_update_hour_out_of_range_returns_error(self):
-        from server.rule_config import update_config
+        from server.detection.rule_config import update_config
         _, errors = update_config({"after_hours_start": 25})
         assert errors
 
     def test_update_partial_applies_valid_rejects_invalid(self):
-        from server.rule_config import get_config, update_config
+        from server.detection.rule_config import get_config, update_config
         new_cfg, errors = update_config({"rapid_cycle_count": 7, "bad_key": 999})
         assert errors  # bad_key rejected
         assert new_cfg["rapid_cycle_count"] == 7  # valid key applied

@@ -1,5 +1,5 @@
 """
-server/rules.py – Anomaly detection rules engine.
+server/detection/rules.py – Anomaly detection rules engine.
 
 Each rule is a plain function with signature::
 
@@ -29,7 +29,7 @@ import datetime
 import logging
 from typing import Any, Dict, List, NamedTuple, Optional
 
-from server.rule_config import get_config
+from server.detection.rule_config import get_config
 from server.metrics import METRICS
 
 logger = logging.getLogger(__name__)
@@ -195,7 +195,7 @@ def rule_cross_agent_device(event: EventDict, db: Any) -> Optional[Alert]:
 
 def rule_honeypot_device(event: EventDict, db: Any) -> Optional[Alert]:
     """Fire when a known honeypot device is connected."""
-    from server.honeypot import is_honeypot_device
+    from server.detection.honeypot import is_honeypot_device
     device_id = event.get("device_id", "")
     if device_id and is_honeypot_device(device_id):
         return Alert(
@@ -213,7 +213,7 @@ def rule_known_malicious_device(event: EventDict, db: Any) -> Optional[Alert]:
     """Fire CRITICAL when the device VID:PID appears in the threat feed."""
     if event.get("event_type") != "connected":
         return None
-    from server.threat_feed import is_known_malicious
+    from server.detection.threat_feed import is_known_malicious
     device_id = event.get("device_id", "")
     if device_id and is_known_malicious(device_id):
         return Alert(

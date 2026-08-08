@@ -1,6 +1,6 @@
 """Tests for anomaly detector."""
 from __future__ import annotations
-from server.anomaly import AnomalyDetector, extract_features
+from server.detection.anomaly import AnomalyDetector, extract_features
 
 
 def _make_events(n, hour=14, transfer_bytes=0):

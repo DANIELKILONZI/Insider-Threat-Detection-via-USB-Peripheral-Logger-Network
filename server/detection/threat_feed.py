@@ -1,5 +1,5 @@
 """
-server/threat_feed.py – USB VID:PID threat feed for known-malicious devices.
+server/detection/threat_feed.py – USB VID:PID threat feed for known-malicious devices.
 
 The feed is a set of "vendor_id:product_id" strings (lower-case hex, e.g.
 ``"0781:5567"``).  Two sources are supported:
@@ -20,7 +20,7 @@ malicious.
 
 Usage::
 
-    from server.threat_feed import is_known_malicious
+    from server.detection.threat_feed import is_known_malicious
 
     if is_known_malicious("0781:5567"):
         ...

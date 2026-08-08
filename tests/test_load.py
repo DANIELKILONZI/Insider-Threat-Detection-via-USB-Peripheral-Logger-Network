@@ -115,7 +115,7 @@ def test_single_event_db_insert(benchmark, bench_db):
 def test_rules_evaluate(benchmark, bench_db):
     """Measure rules engine evaluation throughput."""
     import importlib
-    import server.rules as rules_mod
+    import server.detection.rules as rules_mod
     importlib.reload(rules_mod)
 
     event = _make_event()

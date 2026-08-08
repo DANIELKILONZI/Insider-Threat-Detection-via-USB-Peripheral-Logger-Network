@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from server.rules import (
+from server.detection.rules import (
     Alert,
     evaluate,
     rule_after_hours_device,

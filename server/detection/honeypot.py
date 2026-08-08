@@ -1,5 +1,5 @@
 """
-server/honeypot.py – Honeypot device profile detection for ITDN.
+server/detection/honeypot.py – Honeypot device profile detection for ITDN.
 """
 
 from __future__ import annotations

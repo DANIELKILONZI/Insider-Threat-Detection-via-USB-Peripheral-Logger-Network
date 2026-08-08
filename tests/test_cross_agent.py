@@ -1,7 +1,7 @@
 """Tests for cross-agent device correlation rule."""
 from __future__ import annotations
 from unittest.mock import MagicMock
-from server.rules import rule_cross_agent_device
+from server.detection.rules import rule_cross_agent_device
 
 
 def test_no_alert_when_device_only_on_one_host():
