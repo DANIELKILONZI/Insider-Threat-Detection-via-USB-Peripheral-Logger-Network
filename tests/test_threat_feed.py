@@ -149,3 +149,49 @@ def test_rule_known_malicious_device_does_not_fire_for_clean_device():
     }
     alerts = rules_mod.evaluate(event, _MockDB())
     assert not any(a.rule_name == "known_malicious_device" for a in alerts)
+
+
+# ── Cold-start concurrency ───────────────────────────────────────────────────
+# is_known_malicious() runs per event on the ingest path.  On a cold server all
+# concurrent requests reach _ensure_loaded() at once, so the first-load guard
+# must hold for more than one thread or every request issues its own fetch to
+# ITDN_THREAT_FEED_URL.
+
+def test_concurrent_first_use_loads_the_feed_only_once(monkeypatch):
+    import threading
+    import time
+
+    import server.detection.threat_feed as tf
+
+    calls: list[float] = []
+
+    def _slow_remote(url):
+        calls.append(time.monotonic())
+        time.sleep(0.05)  # widen the window a real network fetch would open
+        return {"dead:beef"}
+
+    monkeypatch.setattr(tf, "_load_remote", _slow_remote)
+    monkeypatch.setattr(tf, "_load_local", lambda path: set())
+    monkeypatch.setattr(tf, "THREAT_FEED_URL", "https://feed.example/list")
+
+    # Force the cold-start state.
+    with tf._feed_lock:
+        tf._known_malicious = set()
+    tf._loaded = False
+
+    barrier = threading.Barrier(8)
+    results: list[bool] = []
+
+    def _worker():
+        barrier.wait()  # maximise the overlap
+        results.append(tf.is_known_malicious("dead:beef"))
+
+    threads = [threading.Thread(target=_worker) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    assert len(calls) == 1, f"feed fetched {len(calls)} times; expected exactly 1"
+    assert results == [True] * 8
+    assert tf._loaded is True

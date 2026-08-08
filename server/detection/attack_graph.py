@@ -5,7 +5,6 @@ server/detection/attack_graph.py – Attack graph builder for ITDN incident visu
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 logger = logging.getLogger(__name__)
@@ -66,30 +65,37 @@ def detect_exfil_pattern(graph: Dict[str, Any]) -> List[str]:
     Detect potential exfiltration patterns in the attack graph.
 
     Returns list of human-readable findings.
+
+    A device is reported only when *that same device* has both a connect and a
+    disconnect action.  The previous implementation tested the graph globally —
+    any device connected and any device disconnected — which is true on almost
+    every workstation and so fired on nearly every host.
+
+    Note this deliberately makes no claim about how *quickly* a device cycled:
+    the graph carries no timestamps.  Time-windowed rapid-cycle detection is
+    :func:`server.detection.rules.rule_rapid_cycle`, which has the event
+    timestamps needed to judge it.
     """
     findings: List[str] = []
-    nodes = graph.get("nodes", [])
     edges = graph.get("edges", [])
 
-    device_ids = {
-        n["id"].split(":", 1)[1]
-        for n in nodes
-        if n.get("type") == "device"
-    }
+    # device node id -> the action relations observed on that device
+    actions_by_device: Dict[str, set] = {}
+    for edge in edges:
+        source = edge.get("from", "")
+        if source.startswith("device:"):
+            actions_by_device.setdefault(source, set()).add(edge.get("relation", ""))
 
-    action_labels = {
-        n.get("label", "")
-        for n in nodes
-        if n.get("type") == "action"
-    }
+    cycled = sorted(
+        node_id.split(":", 1)[1]
+        for node_id, actions in actions_by_device.items()
+        if "connected" in actions and "disconnected" in actions
+    )
 
-    has_connected = "connected" in action_labels
-    has_disconnected = "disconnected" in action_labels
-
-    if device_ids and has_connected and has_disconnected:
+    if cycled:
         findings.append(
-            f"Rapid device cycling detected: {len(device_ids)} device(s) "
-            "connected and disconnected."
+            f"Device connect/disconnect cycling on {len(cycled)} device(s): "
+            + ", ".join(cycled)
         )
 
     return findings

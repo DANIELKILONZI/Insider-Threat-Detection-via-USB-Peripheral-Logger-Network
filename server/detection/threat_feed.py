@@ -39,6 +39,10 @@ from server.config import THREAT_FEED_PATH, THREAT_FEED_URL
 logger = logging.getLogger(__name__)
 
 _feed_lock = threading.Lock()
+# Separate from _feed_lock so that _ensure_loaded() can hold it across the call
+# into reload(), which takes _feed_lock itself.  threading.Lock is not
+# reentrant, so reusing one lock for both would deadlock.
+_load_lock = threading.Lock()
 _known_malicious: Set[str] = set()
 _loaded = False
 
@@ -103,8 +107,23 @@ def reload() -> int:
 
 
 def _ensure_loaded() -> None:
-    global _loaded
-    if not _loaded:
+    """Populate the feed on first use, fetching at most once.
+
+    ``is_known_malicious`` runs per event on the ingest path, so on a cold
+    server every concurrent request arrives here at the same time.  Checking
+    ``_loaded`` without a lock let all of them fall through into ``reload()``
+    together, each issuing its own request to ITDN_THREAT_FEED_URL with a 15 s
+    timeout — a self-inflicted stampede against the feed provider, and a stall
+    on the ingest path proportional to how slow that provider is.
+
+    Double-checked locking keeps the steady-state fast path lock-free while
+    ensuring only the first caller actually loads.
+    """
+    if _loaded:
+        return
+    with _load_lock:
+        if _loaded:  # another thread loaded while we waited
+            return
         reload()
 
 

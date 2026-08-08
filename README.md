@@ -58,7 +58,7 @@ Splunk, or Elasticsearch within seconds.
 | **SOC dashboard** | Live alert feed, colour-coded risk gauges, anomaly σ column |
 | **SIEM integrations** | Splunk HEC, Elasticsearch Bulk API |
 | **Prometheus metrics** | Scrape-ready `/metrics` endpoint |
-| **221 automated tests** | Unit + full-stack integration, Python 3.11 & 3.12, CodeQL on every PR |
+| **227 automated tests** | Unit + full-stack integration, Python 3.11 & 3.12, CodeQL on every PR |
 
 ---
 
@@ -566,7 +566,7 @@ pip install -r requirements.txt
 python -m pytest tests/ -v
 ```
 
-The suite contains **221 tests** covering unit behaviour and full-stack
+The suite contains **227 tests** covering unit behaviour and full-stack
 integration against a real in-memory SQLite database.
 
 ---
@@ -649,7 +649,7 @@ pull request:
 │   ├── env.py                      # Targets server.database.metadata
 │   └── versions/                   # Migration history (one file per revision)
 │
-├── tests/                          # 221 unit + integration tests
+├── tests/                          # 227 unit + integration tests
 │   ├── conftest.py
 │   ├── test_api.py
 │   ├── test_rules.py
